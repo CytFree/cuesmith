@@ -43,10 +43,10 @@ from . import __version__
 from .clean import is_degenerate_text
 from .condense import CondenseResult, condense_text, estimate_max_chars
 from .glossary import Glossary, Term, glossary_fingerprint
+from .langs import profile as lang_profile
 from .report import file_digest
 from .srt import Cue, Subtitle, dump_srt, load_srt
 from .textutil import char_count
-from .validate import LANG_PROFILES
 
 __all__ = [
     "EchoTranslator",
@@ -1060,11 +1060,12 @@ class TranslateResult:
 
 
 def _profile(code: str):
+    """语言 profile（阈值唯一真相源在 :mod:`submatrix.langs`）；错误按翻译层契约抛。"""
+
     try:
-        return LANG_PROFILES[code]
-    except KeyError:
-        supported = "、".join(sorted(LANG_PROFILES))
-        raise TranslateError(f"不支持的语言：{code!r}（当前支持 {supported}）") from None
+        return lang_profile(code)
+    except ValueError as exc:
+        raise TranslateError(str(exc)) from None
 
 
 def _cps(value_chars: int, duration_ms: int) -> float:

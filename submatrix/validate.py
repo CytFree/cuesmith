@@ -10,8 +10,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .langs import LANG_PROFILES, LangProfile, profile as _profile
 from .srt import Cue, Subtitle, format_srt_time
 from .textutil import char_count, split_text_lines
 
@@ -24,32 +25,24 @@ __all__ = [
     "validate",
 ]
 
-
-@dataclass(frozen=True, slots=True)
-class LangProfile:
-    code: str
-    label: str
-    cjk: bool
-    cps: float
-    width: int
-
-
-# 阈值出处：英文 20 CPS / 42 字符每行是 Netflix、BBC 等字幕规范的常用上限；
-# 中文 9 字每秒 ≈ 中文阅读速度的经验值。实测同一段素材平均 15.8 CPS。
-LANG_PROFILES: dict[str, LangProfile] = {
-    "zh": LangProfile(code="zh", label="中文", cjk=True, cps=9.0, width=16),
-    "en": LangProfile(code="en", label="英文", cjk=False, cps=20.0, width=42),
-}
+# Limits 空构造的默认方向（zh→en）：与 pipeline 的产品默认一致（源中文、译英文）。
+# 真正决定阈值的还是 LANG_PROFILES；这里只是选哪两个语言码当默认。
+DEFAULT_SRC_LANG = "zh"
+DEFAULT_TGT_LANG = "en"
 
 
 @dataclass(frozen=True, slots=True)
 class Limits:
-    """可配置阈值。源/目标各一套，因为两种语言的计量口径不同。"""
+    """可配置阈值。源/目标各一套，因为两种语言的计量口径不同。
 
-    cps_src: float = 9.0
-    cps_tgt: float = 20.0
-    width_src: int = 16
-    width_tgt: int = 42
+    默认值从 :mod:`submatrix.langs` 的 ``LANG_PROFILES`` 推导，不再各存一份字面量——
+    改阈值只需要改那一张表。
+    """
+
+    cps_src: float = field(default_factory=lambda: LANG_PROFILES[DEFAULT_SRC_LANG].cps)
+    cps_tgt: float = field(default_factory=lambda: LANG_PROFILES[DEFAULT_TGT_LANG].cps)
+    width_src: int = field(default_factory=lambda: LANG_PROFILES[DEFAULT_SRC_LANG].width)
+    width_tgt: int = field(default_factory=lambda: LANG_PROFILES[DEFAULT_TGT_LANG].width)
     max_lines: int = 2
 
     @classmethod
@@ -73,14 +66,6 @@ class Limits:
             width_tgt=tgt_profile.width if width_tgt is None else width_tgt,
             max_lines=max_lines,
         )
-
-
-def _profile(code: str) -> LangProfile:
-    try:
-        return LANG_PROFILES[code]
-    except KeyError:
-        supported = "、".join(sorted(LANG_PROFILES))
-        raise ValueError(f"不支持的语言：{code!r}（当前支持 {supported}）") from None
 
 
 @dataclass(frozen=True, slots=True)

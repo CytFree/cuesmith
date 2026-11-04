@@ -16,10 +16,14 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
-from typing import Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Sequence
 
+from .langs import LANG_PROFILES
 from .srt import Cue, Subtitle, Timing
+
+if TYPE_CHECKING:  # 只为类型：运行时不把排版层绑到校验层
+    from .validate import Limits
 
 __all__ = [
     "LayoutOptions",
@@ -46,17 +50,41 @@ FUNCTION_WORDS = frozenset(
 )
 
 
+# LayoutOptions 空构造的默认方向（en→zh）：排版层的历史默认，直接调用/测试依赖它。
+# pipeline 走 ``from_limits()`` 显式传值，所以这里的方向不影响成品链路。
+DEFAULT_SRC_LANG = "en"
+DEFAULT_TGT_LANG = "zh"
+
+
 @dataclass(frozen=True, slots=True)
 class LayoutOptions:
-    src_width: int = 42
-    tgt_width: int = 16
+    """排版参数。默认值从 ``LANG_PROFILES`` 推导，不另存一份字面量。"""
+
+    src_width: int = field(default_factory=lambda: LANG_PROFILES[DEFAULT_SRC_LANG].width)
+    tgt_width: int = field(default_factory=lambda: LANG_PROFILES[DEFAULT_TGT_LANG].width)
     max_lines: int = 2
     min_duration_ms: int = 400
     # 每种语言"每秒能读多少字"。时间分配必须按**语速**折算：
     # 英文 42 字符/行、中文 16 字/行，同样内容英文的字符数约是中文的 3 倍，
     # 只按字符数分时间会让中文 CPS 忽高忽低（实测 50/57 条误报超限）。
-    src_cps: float = 20.0
-    tgt_cps: float = 9.0
+    src_cps: float = field(default_factory=lambda: LANG_PROFILES[DEFAULT_SRC_LANG].cps)
+    tgt_cps: float = field(default_factory=lambda: LANG_PROFILES[DEFAULT_TGT_LANG].cps)
+
+    @classmethod
+    def from_limits(cls, limits: "Limits") -> "LayoutOptions":
+        """按校验阈值构造排版参数。
+
+        同一对字幕的"合规线"（validate）和"排版线"（layout）必须同源，
+        否则会出现"校验说超宽、排版却按另一套折行"。matrix 走这一条。
+        """
+
+        return cls(
+            src_width=limits.width_src,
+            tgt_width=limits.width_tgt,
+            max_lines=limits.max_lines,
+            src_cps=limits.cps_src,
+            tgt_cps=limits.cps_tgt,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,60 +383,6 @@ def _adjust(groups: list[str], target: int) -> list[str]:
     return groups
 
 
-def _text_parts(
-    text: str,
-    capacity: int,
-    target: int | None = None,
-    *,
-    span_ms: int = 0,
-    min_piece_ms: int = 800,
-) -> list[str]:
-    """把一个 cue 的文本切成排版用的小段。
-
-    默认**一句一条**（字幕的理想粒度）；只有"按比例估出来太短"（<min_piece_ms）的相邻句
-    才合并，避免一闪而过的短条。单句超过容量时降级到分句/词字切分。
-    """
-
-    flattened = _flatten(text)
-    if not flattened:
-        return [""]
-
-    units = _units(flattened, SENTENCE_UNIT)
-    refined: list[str] = []
-    for unit in units:
-        if len(unit) > capacity:
-            for clause in _units(unit, CLAUSE_UNIT):
-                refined.extend(_chunk_unit(clause, capacity))
-        else:
-            refined.append(unit)
-
-    total_chars = sum(len(unit) for unit in refined) or 1
-    merged: list[str] = []
-    for unit in refined:
-        if merged:
-            previous = merged[-1]
-            estimate = span_ms * min(len(unit), len(previous)) / total_chars if span_ms else 0
-            combined = _join(previous, unit)
-            if span_ms and estimate < min_piece_ms and len(combined) <= capacity:
-                merged[-1] = combined
-                continue
-        merged.append(unit)
-
-    groups = merged
-    if target is not None and target > 0:
-        groups = _adjust(list(groups), min(target, MAX_PARTS))
-    return [group.strip() for group in groups if group.strip()]
-
-
-def _split_text(text: str, parts: int) -> list[str]:
-    """兼容旧接口：把文本切成 parts 段（优先句子/分句边界）。"""
-
-    flattened = _flatten(text)
-    if parts <= 1 or not flattened:
-        return [flattened] * max(parts, 1)
-    return _text_parts(flattened, max(1, math.ceil(len(flattened) / parts)), parts)
-
-
 def _allocate_timings(
     timing: Timing, weights: Sequence[float], *, min_duration_ms: int
 ) -> list[Timing]:
@@ -659,7 +633,6 @@ def layout_pair(
         max_parts = max(1, min(MAX_PARTS, span // settings.min_duration_ms or 1))
         src_capacity = settings.src_width * settings.max_lines
         tgt_capacity = settings.tgt_width * settings.max_lines
-        piece_min = settings.min_duration_ms * 2
         # 拍平：whisper/机翻可能带换行或连续空格，切片前不归一会出现空段
         src_text = " ".join(src_cue.text.split())
         tgt_text = " ".join(tgt_cue.text.split())

@@ -35,6 +35,26 @@ pytestmark = pytest.mark.skipif(
     FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
 )
 
+
+@pytest.fixture(autouse=True)
+def _no_local_tts_fallback(monkeypatch) -> None:
+    """本文件只验 Edge 引擎的编排契约：把"本地 TTS"钉死成**不可用**。
+
+    为什么需要：OPT-11 起 ``DubOptions.tts_fallback`` 默认 ``"local"``，Edge 失败的条目
+    会调**真的**本地模型兜底（[dub.py](../../submatrix/dub.py) 里 `ensure_local_info()`）。
+    于是"引擎失败 → 记 failed / status=partial"这类用例，在装了 ``spike/local-tts`` 的
+    机器上会变成"失败被兜底救回 → failed=0、status=ok"，**结论随机器环境飘**
+    （本机 5 个本地模型常驻，曾让 4 个用例长期红）。
+
+    本地兜底自身的契约（救回、事件、告警、兜底也失败）由 ``test_dub_local.py`` 的
+    ``fake_local`` 夹具显式覆盖，不需要这里重复覆盖。
+    """
+
+    def unavailable(options):  # noqa: ANN001, ARG001 - 签名跟随 _local_model_info
+        raise DubError("测试用：本地 TTS 不可用")
+
+    monkeypatch.setattr(dub_module, "_local_model_info", unavailable)
+
 SRT_3 = (
     "1\n00:00:00,000 --> 00:00:02,000\nFirst line here\n"
     "\n"

@@ -77,13 +77,8 @@ def run_matrix(options: MatrixOptions) -> MatrixResult:
         laid_src, laid_tgt, stats = layout_pair(
             src_sub,
             tgt_sub,
-            options=LayoutOptions(
-                src_width=limits.width_src,
-                tgt_width=limits.width_tgt,
-                max_lines=limits.max_lines,
-                src_cps=limits.cps_src,
-                tgt_cps=limits.cps_tgt,
-            ),
+            # 排版参数从校验阈值派生：合规线与排版线同源
+            options=LayoutOptions.from_limits(limits),
         )
         after = validate(laid_src, laid_tgt, limits=limits, src_lang=options.src_lang, tgt_lang=options.tgt_lang)
         layout_info = {
