@@ -1,0 +1,22 @@
+[project]
+name = "submatrix"
+version = "0.1.0"
+description = "视频字幕矩阵工具：内封字幕探测、字幕文件矩阵导出、CPS 校验、配音编排、AIGC 标识"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# 本地 Web GUI（Gradio 薄壳）：不装也能用全部 CLI 功能
+gui = ["gradio>=6"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["submatrix"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
