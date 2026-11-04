@@ -28,6 +28,7 @@ from typing import Callable, Sequence
 from . import __version__
 from .report import OutputFile, file_digest
 from .srt import Cue, Subtitle, Timing, dump_srt
+from .worker_protocol import run_once, subprocess_runner
 
 __all__ = [
     "AsrError",
@@ -105,10 +106,7 @@ class AsrResult:
 # ---------------------------------------------------------------------- 环境
 
 
-def _default_runner(command: Sequence[str]) -> "subprocess.CompletedProcess[str]":
-    return subprocess.run(  # noqa: S603
-        list(command), capture_output=True, text=True, timeout=3600, encoding="utf-8", errors="replace"
-    )
+_default_runner = subprocess_runner(3600)  # 长视频 medium 模型可能跑很久
 
 
 def _candidates_python(explicit: str | None) -> list[str]:
@@ -424,20 +422,14 @@ def run_asr(options: AsrOptions) -> AsrResult:
         command.append("--no-vad")
 
     started = time.monotonic()
-    try:
-        completed = runner(command)
-    except subprocess.TimeoutExpired as exc:  # type: ignore[attr-defined]
-        raise AsrError(f"ASR 进程超时：{exc}") from exc
-
-    if not raw_path.is_file():
-        tail = (getattr(completed, "stderr", "") or "").strip()[-500:]
-        raise AsrError(f"ASR 进程没有产出结果（退出码 {completed.returncode}）：{tail}")
-
-    payload = json.loads(raw_path.read_text(encoding="utf-8-sig"))
-    if not payload.get("ok"):
-        error = payload.get("error") or "未知错误"
-        tail = str(payload.get("traceback", "")).strip()[-500:]
-        raise AsrError(f"ASR 识别失败：{error}\n{tail}")
+    payload = run_once(
+        command,
+        raw_path,
+        error_cls=AsrError,
+        runner=runner,
+        label="ASR",
+        failure_label="ASR 识别",
+    )
 
     words = payload.get("words") or []
     raw_segments = payload.get("segments") or []
@@ -448,7 +440,6 @@ def run_asr(options: AsrOptions) -> AsrResult:
         pause_ms=options.pause_ms,
         min_duration_ms=options.min_duration_ms,
     )
-    dropped = len(raw_segments) - len(segments)
     wall = time.monotonic() - started
     duration_s = float(payload.get("duration") or 0.0)
     speech_s = sum(segment.end_ms - segment.start_ms for segment in segments) / 1000

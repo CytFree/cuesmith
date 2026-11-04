@@ -16,11 +16,14 @@ ctranslate2 / onnxruntime，版本敏感（4.8.x 在 Windows 上会访问违例�
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
-import traceback
 from pathlib import Path
+
+if __package__:
+    from . import worker_protocol as protocol
+else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
+    import worker_protocol as protocol
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,33 +87,24 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             if len(realized) % 25 == 0:
-                print(f"… {len(realized)} 段 / {len(words)} 词", file=sys.stderr, flush=True)
+                protocol.emit_progress(f"… {len(realized)} 段 / {len(words)} 词")
 
-        payload = {
-            "ok": True,
-            "language": info.language,
-            "language_probability": round(float(info.language_probability), 4),
-            "duration": round(float(info.duration), 3),
-            "duration_after_vad": round(float(info.duration_after_vad), 3),
-            "words": words,
-            "segments": realized,
-            "wall_s": round(time.monotonic() - started, 2),
-            "model": str(args.model),
-        }
+        payload = protocol.ok_payload(
+            language=info.language,
+            language_probability=round(float(info.language_probability), 4),
+            duration=round(float(info.duration), 3),
+            duration_after_vad=round(float(info.duration_after_vad), 3),
+            words=words,
+            segments=realized,
+            wall_s=round(time.monotonic() - started, 2),
+            model=str(args.model),
+        )
         code = 0
     except Exception as exc:  # noqa: BLE001 - 失败也要落 JSON 给父进程看
-        payload = {
-            "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc()[-2000:],
-            "wall_s": round(time.monotonic() - started, 2),
-        }
+        payload = protocol.error_payload(exc, wall_s=round(time.monotonic() - started, 2))
         code = 1
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
-    )
+    protocol.write_payload(args.output, payload)
     return code
 
 

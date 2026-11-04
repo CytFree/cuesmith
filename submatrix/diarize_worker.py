@@ -19,12 +19,15 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
-import traceback
 import wave
 from pathlib import Path
+
+if __package__:
+    from . import worker_protocol as protocol
+else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
+    import worker_protocol as protocol
 
 # 拼接语音段时插入的静音（秒）：完全无缝拼接会让分割模型把两段不同的话
 # 当成同一句，留一点静音既保留换人线索，又不让音乐/噪声进来。
@@ -550,32 +553,24 @@ def main() -> int:
         if layout is not None:
             # compact 时间轴 → 原视频时间轴（按语音段拆开，不含被丢掉的音乐区间）
             segments = _map_segments_back(segments, layout)
-        payload = {
-            "ok": True,
-            "sample_rate": int(diarizer.sample_rate),
-            "duration_s": round(original_duration_s, 3),
-            "model_input_s": round(len(samples) / diarizer.sample_rate, 3),
-            "elapsed_s": round(time.monotonic() - started, 3),
-            "vad": vad,
-            "clustering": clustering_payload,
-            "segments": segments,
-        }
-    except Exception as exc:  # noqa: BLE001 - worker 必须把失败原因带回主进程
-        payload = {
-            "ok": False,
-            "error": f"{type(exc).__name__}: {exc}",
-            "traceback": traceback.format_exc()[-2000:],
-            "elapsed_s": round(time.monotonic() - started, 3),
-            "vad": vad,
-        }
-    finally:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+        payload = protocol.ok_payload(
+            sample_rate=int(diarizer.sample_rate),
+            duration_s=round(original_duration_s, 3),
+            model_input_s=round(len(samples) / diarizer.sample_rate, 3),
+            elapsed_s=round(time.monotonic() - started, 3),
+            vad=vad,
+            clustering=clustering_payload,
+            segments=segments,
         )
+    except Exception as exc:  # noqa: BLE001 - worker 必须把失败原因带回主进程
+        payload = protocol.error_payload(
+            exc, elapsed_s=round(time.monotonic() - started, 3), vad=vad
+        )
+    finally:
+        protocol.write_payload(output, payload, indent=2)
 
     if not payload.get("ok"):
-        print(payload.get("error", "diarization failed"), file=sys.stderr)
+        protocol.emit_progress(str(payload.get("error", "diarization failed")))
         return 1
     return 0
 

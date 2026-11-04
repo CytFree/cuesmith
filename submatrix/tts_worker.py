@@ -40,9 +40,13 @@ import argparse
 import json
 import sys
 import time
-import traceback
 import wave
 from pathlib import Path
+
+if __package__:
+    from . import worker_protocol as protocol
+else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
+    import worker_protocol as protocol
 
 __all__ = [
     "KOKORO_SPEAKERS",
@@ -326,8 +330,7 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     def emit(payload: dict[str, object]) -> None:
-        protocol_out.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        protocol_out.flush()
+        protocol.write_line(protocol_out, payload)
 
     started = time.monotonic()
     try:
@@ -335,13 +338,7 @@ def main(argv: list[str] | None = None) -> int:
         kind = detect_kind(model_dir) if args.kind == "auto" else args.kind
         tts = load_tts(model_dir, kind, args.threads)
     except Exception as exc:  # noqa: BLE001 - 加载失败必须落一行 JSON 再退出
-        emit(
-            {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc()[-2000:],
-            }
-        )
+        emit(protocol.error_payload(exc))
         return 1
 
     emit(
@@ -366,11 +363,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("请求必须是 JSON 对象")
             payload = _synthesize(tts, request, kind=kind)
         except Exception as exc:  # noqa: BLE001 - 单条失败不能弄崩 worker
-            payload = {
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc()[-2000:],
-            }
+            payload = protocol.error_payload(exc)
         emit(payload)
 
     return 0

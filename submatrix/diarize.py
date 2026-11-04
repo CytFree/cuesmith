@@ -36,6 +36,7 @@ from typing import Callable, Sequence
 from . import __version__
 from .report import OutputFile, file_digest
 from .srt import load_srt
+from .worker_protocol import run_once, subprocess_runner
 
 __all__ = [
     "DEFAULT_EMBEDDING_MODELS",
@@ -220,15 +221,7 @@ class DiarizeResult:
 # ---------------------------------------------------------------------- 环境
 
 
-def _default_runner(command: Sequence[str]) -> "subprocess.CompletedProcess[str]":
-    return subprocess.run(  # noqa: S603
-        list(command),
-        capture_output=True,
-        text=True,
-        timeout=7200,
-        encoding="utf-8",
-        errors="replace",
-    )
+_default_runner = subprocess_runner(7200)  # 长视频 + 声纹二次聚类可能很久
 
 
 def _resolve_threads(num_threads: int) -> int:
@@ -1033,19 +1026,13 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
             f"{options.min_speaker_share:g}",
         ]
     )
-    try:
-        completed = run(command)
-    except subprocess.TimeoutExpired as exc:
-        raise DiarizeError(f"说话人分离进程超时：{exc}") from exc
-
-    if not raw_path.is_file():
-        tail = (getattr(completed, "stderr", "") or "").strip()[-500:]
-        raise DiarizeError(f"说话人分离进程没有产出结果（退出码 {completed.returncode}）：{tail}")
-    payload = json.loads(raw_path.read_text(encoding="utf-8-sig"))
-    if not payload.get("ok"):
-        error = payload.get("error") or "未知错误"
-        tail = str(payload.get("traceback", "")).strip()[-600:]
-        raise DiarizeError(f"说话人分离失败：{error}\n{tail}")
+    payload = run_once(
+        command,
+        raw_path,
+        error_cls=DiarizeError,
+        runner=run,
+        label="说话人分离",
+    )
 
     turns, _id_map = _normalize_turns(payload.get("segments") or [])
     raw_vad = payload.get("vad")

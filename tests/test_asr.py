@@ -219,6 +219,29 @@ def test_run_asr_reports_worker_failure(tmp_path) -> None:
         run_asr(make_options(tmp_path, runner))
 
 
+def test_run_asr_wraps_garbage_worker_output_as_asr_error(tmp_path) -> None:
+    """worker 写出坏 JSON 时必须是 AsrError，不能让 JSONDecodeError 穿透。
+
+    以前这里是裸 ``json.loads``：worker 半途被杀、磁盘写一半都会抛
+    ``json.JSONDecodeError``，而 pipeline 只捕 ``AsrError``——整套链路直接崩栈。
+    """
+
+    class GarbageRunner(FakeRunner):
+        def __call__(self, command):
+            self.calls.append(list(command))
+            if len(command) >= 3 and command[1] == "-c":
+                return subprocess.CompletedProcess(command, 0, "", "")
+            output = command[command.index("--output") + 1]
+            with open(output, "w", encoding="utf-8") as handle:
+                handle.write("{truncated json")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+    runner = GarbageRunner({})
+
+    with pytest.raises(AsrError, match="不是合法 JSON"):
+        run_asr(make_options(tmp_path, runner))
+
+
 def test_run_asr_missing_python_has_actionable_message(tmp_path) -> None:
     runner = FakeRunner(worker_payload(), python_ok=False)
 

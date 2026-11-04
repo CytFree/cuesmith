@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .worker_protocol import describe_error
+
 __all__ = [
     "DEFAULT_MODEL_CANDIDATES",
     "KOKORO_SPEAKERS",
@@ -573,9 +575,9 @@ class _Worker:
 
             result = _parse_json_line(response)
             if not result.get("ok"):
-                raise LocalTtsError(
-                    f"本地 TTS 合成失败：{result.get('error') or result}"
-                )
+                # 带上 worker 的 traceback 尾巴：本地 TTS 失败最常见的根因（模型/音色/sherpa 版本）
+                # 只在栈里看得见，以前这里把 traceback 丢了，排查等于盲猜
+                raise LocalTtsError(f"本地 TTS 合成失败：{describe_error(result)}")
             return result
 
 
