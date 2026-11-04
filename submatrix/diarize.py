@@ -34,6 +34,15 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from . import __version__
+from . import media
+from .interpreters import (
+    Requirement,
+    missing_message,
+    ordered_candidates,
+    python_in_venv,
+    resolve,
+    runner_probe,
+)
 from .report import OutputFile, file_digest
 from .srt import load_srt
 from .worker_protocol import run_once, subprocess_runner
@@ -67,7 +76,6 @@ __all__ = [
 EXIT_OK = 0
 EXIT_INVALID = 2
 
-FFMPEG = "ffmpeg"
 SAMPLE_RATE = 16000  # pyannote segmentation-3.0 要求 16k 单声道
 # 中英文各一个声纹模型：中文用 3D-Speaker（eres2net），英文用 NeMo（titanet-small，更快）
 DEFAULT_EMBEDDING_MODELS = {
@@ -232,47 +240,42 @@ def _resolve_threads(num_threads: int) -> int:
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
 
-def _diarization_candidates(explicit: str | None) -> list[str]:
-    tried: list[str] = []
+_DIARIZE_PYTHON = Requirement(
+    label="sherpa-onnx",
+    module="sherpa_onnx",
+    parameter="--diarize-python",
+    env_var="SUBMATRIX_DIARIZATION_PYTHON",
+    hint="先建隔离环境：python -m venv spike/diarization/.venv + "
+    "pip install sherpa-onnx numpy==1.26.4。",
+)
+
+
+def _search_pythons() -> list[str]:
+    """仓库里值得一看的解释器（显式参数与环境变量由 resolve 统一排在最前面）。"""
+
     project = Path(__file__).resolve().parent.parent
-    for candidate in (
-        explicit,
-        os.environ.get("SUBMATRIX_DIARIZATION_PYTHON"),
-        str(project / "spike" / "diarization" / ".venv" / "Scripts" / "python.exe"),
-        sys.executable,
-    ):
-        if candidate and candidate not in tried:
-            tried.append(candidate)
-    return tried
+    return ordered_candidates(
+        python_in_venv(project / "spike" / "diarization" / ".venv"),
+        (sys.executable,),
+    )
 
 
 def find_diarization_python(
     explicit: str | None = None, *, runner: Runner | None = None
 ) -> str:
-    """找一个真的能 ``import sherpa_onnx`` 的解释器。"""
+    """找一个真的能 ``import sherpa_onnx`` 的解释器（策略见 interpreters）。"""
 
     run = runner or _default_runner
-    errors: list[str] = []
-    for candidate in _diarization_candidates(explicit):
-        if not Path(candidate).is_file():
-            continue
-        try:
-            completed = run([candidate, "-c", "import sherpa_onnx"])
-        except (OSError, subprocess.SubprocessError) as exc:
-            errors.append(f"{candidate}: {exc}")
-            continue
-        if completed.returncode == 0:
-            return candidate
-        detail = (getattr(completed, "stderr", "") or "").strip().splitlines()
-        errors.append(f"{candidate}: {(detail[-1] if detail else 'import 失败')[:160]}")
-    detail = "；".join(errors) if errors else "没有找到可用的 Python"
-    raise DiarizeError(
-        "找不到装有 sherpa-onnx 的 Python。先建隔离环境："
-        "``python -m venv spike/diarization/.venv`` + "
-        "``pip install sherpa-onnx numpy==1.26.4``，"
-        "或用 --diarize-python 指定解释器。"
-        f"（已尝试：{detail}）"
+    found = resolve(
+        _DIARIZE_PYTHON,
+        explicit,
+        candidates=_search_pythons(),
+        probe=runner_probe(run, _DIARIZE_PYTHON.module),
+        error_cls=DiarizeError,
     )
+    if found is None:  # on_missing=raise 时走不到，防御性兜底
+        raise DiarizeError(missing_message(_DIARIZE_PYTHON, ()))
+    return found
 
 
 def _models_dir() -> Path:
@@ -690,16 +693,22 @@ def _extract_audio(source: Path, out_wav: Path) -> None:
     """抽 16k / 16bit / 单声道 WAV（分离模型的要求）。"""
 
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
+    media.run_ffmpeg(
         [
-            FFMPEG, "-v", "error", "-y", "-i", str(source),
-            "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", str(out_wav),
+            "-i",
+            str(source),
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(SAMPLE_RATE),
+            "-c:a",
+            "pcm_s16le",
+            str(out_wav),
         ],
-        capture_output=True,
+        error_cls=DiarizeError,
+        what="抽取音轨",
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()[-500:]
-        raise DiarizeError(f"抽取音轨失败：{detail or 'ffmpeg 返回非零状态'}")
 
 
 def _wav_duration_ms(path: Path) -> int:

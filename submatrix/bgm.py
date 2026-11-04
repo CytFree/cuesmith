@@ -27,6 +27,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import media
+from .interpreters import (
+    MISSING_NONE,
+    Requirement,
+    bool_probe,
+    ordered_candidates,
+    python_in_venv,
+    resolve,
+)
+
 __all__ = [
     "BgmError",
     "BgmOptions",
@@ -36,7 +46,7 @@ __all__ = [
     "run_bgm",
 ]
 
-FFMPEG = "ffmpeg"
+FFMPEG = media.FFMPEG
 MODES = ("auto", "separate", "center", "duck", "off")
 SEPARATED_AUDIO = "no_vocals.wav"  # demucs --two-stems=vocals 的伴奏轨文件名
 MEAN_VOLUME = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB")
@@ -106,26 +116,26 @@ def _demucs_binary(python: str | Path) -> Path | None:
     return None
 
 
+_DEMUCS_PYTHON = Requirement(
+    label="demucs",
+    module="demucs",
+    parameter="--separator-python",
+    # 候选链（含环境变量）由 demucs_candidates 统一给，这里只管报错措辞
+    hint="只在保留 BGM 时需要：把 demucs 装进 spike/demucs/.venv，"
+    "或设置环境变量 SUBMATRIX_DEMUCS_PYTHON。",
+)
+
+
 def demucs_candidates(*explicit: str | None) -> list[str]:
     """候选解释器顺序：显式参数 → 环境变量 → 项目环境 → 当前解释器（已去重）。"""
 
-    ordered: list[str] = []
-    for item in explicit:
-        if item:
-            ordered.append(str(item))
-    env = os.environ.get("SUBMATRIX_DEMUCS_PYTHON")
-    if env:
-        ordered.append(env)
-    # submatrix/bgm.py → 项目根的 spike/demucs/.venv
     project = Path(__file__).resolve().parent.parent
-    ordered.append(str(project / "spike" / "demucs" / ".venv" / "Scripts" / "python.exe"))
-    ordered.append(sys.executable)
-
-    result: list[str] = []
-    for python in ordered:
-        if python not in result:
-            result.append(python)
-    return result
+    return ordered_candidates(
+        explicit,
+        (os.environ.get("SUBMATRIX_DEMUCS_PYTHON"),),
+        python_in_venv(project / "spike" / "demucs" / ".venv"),
+        (sys.executable,),
+    )
 
 
 def _can_import_demucs(python: str) -> bool:
@@ -143,13 +153,18 @@ def _can_import_demucs(python: str) -> bool:
 def find_demucs_python(*candidates: str | None) -> str | None:
     """按顺序找第一个能 ``import demucs`` 的解释器；找不到返回 None。
 
-    只做 ``import`` 探测，不启动模型，毫秒级。
+    demucs 是**可选**组件（只有 ``--keep-bgm`` 才用），所以策略是
+    ``MISSING_NONE`` 而不是抛错——回退到相位抵消式人声消除，由上层写告警。
     """
 
-    for python in demucs_candidates(*candidates):
-        if _can_import_demucs(python):
-            return python
-    return None
+    return resolve(
+        _DEMUCS_PYTHON,
+        None,
+        candidates=demucs_candidates(*candidates),
+        probe=bool_probe(_can_import_demucs),
+        on_missing=MISSING_NONE,
+        error_cls=BgmError,
+    )
 
 
 # ---------------------------------------------------------------------- 分离
@@ -157,17 +172,16 @@ def find_demucs_python(*candidates: str | None) -> str | None:
 
 def _run(
     command: list[str], *, what: str, timeout: float | None = None, env: dict[str, str] | None = None
-) -> subprocess.CompletedProcess:
-    try:
-        completed = subprocess.run(command, capture_output=True, timeout=timeout, env=env)
-    except FileNotFoundError as exc:
-        raise BgmError(f"找不到 {command[0]}，请确认已安装 ffmpeg / demucs") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise BgmError(f"{what}超时（>{timeout:.0f}s）") from exc
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).decode("utf-8", "replace").strip()[-800:]
-        raise BgmError(f"{what}失败：{detail or f'退出码 {completed.returncode}'}")
-    return completed
+) -> "subprocess.CompletedProcess[bytes]":
+    return media.exec_tool(
+        command,
+        error_cls=BgmError,
+        what=what,
+        timeout_s=timeout,
+        env=env,
+        # bgm 这条链路既跑 ffmpeg 也跑 demucs，提示不能只说 ffmpeg
+        missing_hint="找不到 {tool}，请确认已安装 ffmpeg / demucs",
+    )
 
 
 def _extract_audio(source: Path, out_wav: Path) -> Path:
@@ -287,11 +301,13 @@ def mix_filter(options: BgmOptions) -> str:
 def _mean_volume_db(path: Path) -> float | None:
     """整轨平均电平（dB）：用来判断"分离出来的伴奏到底有没有东西"。"""
 
-    completed = subprocess.run(
-        [FFMPEG, "-v", "info", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
-        capture_output=True,
+    completed = media.exec_tool(
+        [media.FFMPEG, "-v", "info", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+        error_cls=BgmError,
+        what="读取平均电平",
+        check=False,  # volumedetect 把结果写 stderr，退出码不重要
     )
-    match = MEAN_VOLUME.search(completed.stderr.decode("utf-8", "replace"))
+    match = MEAN_VOLUME.search(media.stderr_text(completed))
     return float(match.group(1)) if match else None
 
 

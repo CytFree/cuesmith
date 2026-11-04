@@ -26,6 +26,14 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from . import __version__
+from .interpreters import (
+    Requirement,
+    missing_message,
+    ordered_candidates,
+    python_in_venv,
+    resolve,
+    runner_probe,
+)
 from .report import OutputFile, file_digest
 from .srt import Cue, Subtitle, Timing, dump_srt
 from .worker_protocol import run_once, subprocess_runner
@@ -108,45 +116,40 @@ class AsrResult:
 
 _default_runner = subprocess_runner(3600)  # 长视频 medium 模型可能跑很久
 
+_ASR_PYTHON = Requirement(
+    label="faster-whisper",
+    module="faster_whisper",
+    parameter="--asr-python",
+    env_var="SUBMATRIX_ASR_PYTHON",
+    hint="例如 spike/pyvideotrans/.venv/Scripts/python.exe（或自建 venv 后用 --asr-python 指过去）。",
+)
 
-def _candidates_python(explicit: str | None) -> list[str]:
-    import os
 
-    tried: list[str] = []
-    for candidate in (
-        explicit,
-        os.environ.get("SUBMATRIX_ASR_PYTHON"),
-        str(Path(__file__).resolve().parents[1] / "spike" / "pyvideotrans" / ".venv" / "Scripts" / "python.exe"),
-        sys.executable,
-    ):
-        if candidate and candidate not in tried:
-            tried.append(candidate)
-    return tried
+def _search_pythons() -> list[str]:
+    """仓库里值得一看的解释器（显式参数与环境变量由 resolve 统一排在最前面）。"""
+
+    root = Path(__file__).resolve().parents[1]
+    return ordered_candidates(
+        python_in_venv(root / "spike" / "pyvideotrans" / ".venv"),
+        python_in_venv(root / "spike" / "asr" / ".venv"),
+        (sys.executable,),
+    )
 
 
 def find_python(explicit: str | None, *, runner: Runner | None = None) -> str:
-    """找一个真的能 ``import faster_whisper`` 的解释器。"""
+    """找一个真的能 ``import faster_whisper`` 的解释器（策略见 interpreters）。"""
 
     run = runner or _default_runner
-    errors: list[str] = []
-    for candidate in _candidates_python(explicit):
-        if not Path(candidate).is_file():
-            continue
-        try:
-            completed = run([candidate, "-c", "import faster_whisper"])
-        except (OSError, subprocess.SubprocessError) as exc:
-            errors.append(f"{candidate}: {exc}")
-            continue
-        if completed.returncode == 0:
-            return candidate
-        detail = (completed.stderr or "").strip().splitlines()
-        errors.append(f"{candidate}: {(detail[-1] if detail else 'import 失败')[:160]}")
-    detail = "；".join(errors) if errors else "没有找到可用的 Python"
-    raise AsrError(
-        "找不到装有 faster-whisper 的 Python。用 --asr-python 指定底座 venv 的解释器，"
-        "例如 spike/pyvideotrans/.venv/Scripts/python.exe。"
-        f"（已尝试：{detail}）"
+    found = resolve(
+        _ASR_PYTHON,
+        explicit,
+        candidates=_search_pythons(),
+        probe=runner_probe(run, _ASR_PYTHON.module),
+        error_cls=AsrError,
     )
+    if found is None:  # on_missing=raise 时走不到，防御性兜底
+        raise AsrError(missing_message(_ASR_PYTHON, ()))
+    return found
 
 
 def local_models() -> dict[str, Path]:

@@ -31,6 +31,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from .interpreters import (
+    Requirement,
+    bool_probe,
+    missing_message,
+    resolve,
+)
 from .worker_protocol import describe_error
 
 __all__ = [
@@ -49,6 +55,15 @@ __all__ = [
 
 ENV_PYTHON = "SUBMATRIX_LOCAL_TTS_PYTHON"
 ENV_MODEL = "SUBMATRIX_LOCAL_TTS_MODEL"
+
+_LOCAL_TTS_PYTHON = Requirement(
+    label="sherpa-onnx",
+    module="sherpa_onnx",
+    parameter="--local-tts-python",
+    env_var=ENV_PYTHON,
+    hint="本地 TTS 是可选能力：没有模型/依赖时用默认 Edge-TTS（不传 --local-tts 即可）；"
+    "要用的话在装了 sherpa-onnx 的环境里补装依赖，或指一个已装好的解释器。",
+)
 
 #: 仓库内默认模型目录（相对仓库根）；按优先级取第一个"存在且含 model.onnx"的。
 DEFAULT_MODEL_CANDIDATES = (
@@ -197,30 +212,19 @@ def find_local_tts_python(
     ``runner`` 注入探针（测试用）：``runner(python) -> bool``。
     """
 
-    if explicit:
-        return explicit
-    configured = os.environ.get(ENV_PYTHON)
-    if configured:
-        return configured
-
     check = runner or _probe_sherpa_onnx
-    candidates = [*_candidate_local_tts_pythons(), sys.executable]
-    tried: list[str] = []
-    for python in dict.fromkeys(candidates):
-        tried.append(python)
-        if check(python):
-            return python
-
-    listed = "\n".join(f"  - {path}" for path in tried) or "  （无）"
-    raise LocalTtsError(
-        "找不到能 import sherpa_onnx 的 Python 解释器（本地 TTS 兜底不可用）。\n"
-        f"已尝试：\n{listed}\n"
-        "处理方式：\n"
-        "  1) 在已装 sherpa-onnx 的环境里装好依赖，例如 "
-        "spike\\diarization\\.venv\\Scripts\\python.exe -m pip install sherpa-onnx；\n"
-        f"  2) 或用 --local-tts-python 指定解释器，或设置环境变量 {ENV_PYTHON}；\n"
-        "  3) 没有本地模型/依赖时用默认 Edge-TTS（不传 --local-tts 即可）。"
+    found = resolve(
+        _LOCAL_TTS_PYTHON,
+        explicit,
+        candidates=[*_candidate_local_tts_pythons(), sys.executable],
+        probe=bool_probe(check),
+        trust_explicit=True,
+        trust_env=True,
+        error_cls=LocalTtsError,
     )
+    if found is None:  # on_missing=raise 时走不到，防御性兜底
+        raise LocalTtsError(missing_message(_LOCAL_TTS_PYTHON, ()))
+    return found
 
 
 def _is_model_dir(path: Path) -> bool:

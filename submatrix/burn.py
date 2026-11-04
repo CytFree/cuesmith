@@ -22,14 +22,14 @@ from datetime import datetime
 from pathlib import Path
 
 from . import __version__
+from . import media
 from .export import dump_ass_single
 from .report import file_digest
 from .srt import load_srt
 
 __all__ = ["BurnError", "BurnOptions", "BurnResult", "run_burn"]
 
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
+FFMPEG = media.FFMPEG
 PRESETS = (
     "ultrafast",
     "superfast",
@@ -90,15 +90,10 @@ class BurnResult:
 # ---------------------------------------------------------------------- 工具
 
 
-def _run(command: list[str], *, what: str) -> subprocess.CompletedProcess:
-    try:
-        completed = subprocess.run(command, capture_output=True)
-    except FileNotFoundError as exc:
-        raise BurnError(f"找不到 {command[0]}，请确认已装 ffmpeg 并加入 PATH") from exc
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout).decode("utf-8", "replace").strip()[-800:]
-        raise BurnError(f"{what}失败：{detail or f'退出码 {completed.returncode}'}")
-    return completed
+def _run(command: list[str], *, what: str) -> "subprocess.CompletedProcess[bytes]":
+    """跑一条完整的 ffmpeg 命令（首项已是可执行文件名）。"""
+
+    return media.exec_tool(command, error_cls=BurnError, what=what)
 
 
 def _filter_path(path: Path) -> str:
@@ -113,14 +108,12 @@ def _filter_path(path: Path) -> str:
 
 
 def _probe(path: Path) -> dict[str, object]:
-    completed = subprocess.run(
-        [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
-        capture_output=True,
+    return media.ffprobe_json(
+        path,
+        error_cls=BurnError,
+        streams=True,
+        what=f"读不出媒体信息（{path.name}）",
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise BurnError(f"读不出媒体信息（{path.name}）：{detail or '未知错误'}")
-    return json.loads(completed.stdout.decode("utf-8", "replace"))
 
 
 def _duration_ms(info: dict[str, object]) -> int:
@@ -187,17 +180,24 @@ def _region_grayscale(video: Path, at_ms: int, position: str = "bottom") -> byte
     """取一帧，裁出字幕所在区域（底部或顶部 40%）并缩小成灰度图。"""
 
     crop = "crop=iw:ih*2/5:0:ih*3/5" if position == "bottom" else "crop=iw:ih*2/5:0:0"
-    completed = subprocess.run(
+    completed = media.run_ffmpeg(
         [
-            FFMPEG, "-v", "error",
-            "-ss", f"{at_ms / 1000:.3f}",
-            "-i", str(video),
-            "-frames:v", "1",
-            "-vf", f"{crop},scale=160:64,format=gray",
-            "-f", "rawvideo",
+            "-ss",
+            f"{at_ms / 1000:.3f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-vf",
+            f"{crop},scale=160:64,format=gray",
+            "-f",
+            "rawvideo",
             "-",
         ],
-        capture_output=True,
+        error_cls=BurnError,
+        what="截取核验画面",
+        # 像素级核验：抽帧失败时返回空帧由调用方判定，这里不因退出码中断
+        check=False,
     )
     return completed.stdout
 

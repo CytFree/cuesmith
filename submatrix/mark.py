@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import __version__
+from . import media
 from .probe import MediaProbe, probe_media
 from .report import file_digest
 
@@ -48,9 +48,6 @@ __all__ = [
     "run_mark",
     "verify_output",
 ]
-
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
 
 DEFAULT_LABEL = "AI 生成"
 DEFAULT_SECONDS = 3.0
@@ -226,27 +223,16 @@ def build_metadata(options: MarkOptions, content_id: str) -> dict[str, str]:
 
 
 def _format_info(path: Path) -> dict:
-    try:
-        completed = subprocess.run(
-            [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", str(path)],
-            capture_output=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise MarkError("找不到 ffprobe，请确认已装 ffmpeg 并加入 PATH") from exc
-
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise MarkError(f"ffprobe 读不了 {path}：{detail or '未知错误'}")
-    return json.loads(completed.stdout.decode("utf-8", "replace")).get("format", {})
+    payload = media.ffprobe_json(
+        path, error_cls=MarkError, streams=False, what=f"ffprobe 读不了 {path}"
+    )
+    info = payload.get("format")
+    return info if isinstance(info, dict) else {}
 
 
 def _frame_gray(path: Path, at: float) -> bytes:
-    completed = subprocess.run(
+    completed = media.run_ffmpeg(
         [
-            FFMPEG,
-            "-v",
-            "error",
             "-i",
             str(path),
             "-ss",
@@ -259,11 +245,13 @@ def _frame_gray(path: Path, at: float) -> bytes:
             "rawvideo",
             "-",
         ],
-        capture_output=True,
+        error_cls=MarkError,
+        what="抽帧",
+        # 抽帧失败要按"有没有取到画面"判定，退出码交给下面的检查
         check=False,
     )
     if completed.returncode != 0 or not completed.stdout:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
+        detail = media.stderr_text(completed)
         raise MarkError(f"抽帧失败（{path} @ {at}s）：{detail or '没有取到画面'}")
     return completed.stdout
 
@@ -335,14 +323,7 @@ def verify_output(
 
 
 def _run_ffmpeg(args: list[str], *, what: str) -> None:
-    try:
-        completed = subprocess.run([FFMPEG, "-v", "error", "-y", *args], capture_output=True, check=False)
-    except FileNotFoundError as exc:
-        raise MarkError("找不到 ffmpeg，请确认已装 ffmpeg 并加入 PATH") from exc
-
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise MarkError(f"{what}失败：{detail or 'ffmpeg 返回非零状态'}")
+    media.run_ffmpeg(args, error_cls=MarkError, what=what)
 
 
 def _video_size(probe: MediaProbe) -> tuple[int, int]:

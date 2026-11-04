@@ -25,6 +25,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from . import __version__
+from . import media
 from .bgm import BgmError, BgmOptions, BgmResult, run_bgm
 from .report import file_digest
 from .srt import load_srt
@@ -45,9 +46,6 @@ __all__ = [
     "build_engine",
     "run_dub",
 ]
-
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
 
 DEFAULT_SAMPLE_RATE = 24000
 OVERFLOW_MANUAL_THRESHOLD_PCT = 10.0
@@ -315,34 +313,14 @@ def _load_speaker_assignments(path: Path) -> tuple[dict[int, str], dict[str, str
     return mapping, speakers, warnings
 
 
-def _run(command: list[str], *, what: str) -> subprocess.CompletedProcess:
-    try:
-        completed = subprocess.run([FFMPEG, "-v", "error", "-y", *command], capture_output=True)
-    except FileNotFoundError as exc:
-        raise DubError("找不到 ffmpeg，请确认已装 ffmpeg 并加入 PATH") from exc
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise DubError(f"{what}失败：{detail or 'ffmpeg 返回非零状态'}")
-    return completed
+def _run(command: list[str], *, what: str) -> "subprocess.CompletedProcess[bytes]":
+    return media.run_ffmpeg(command, error_cls=DubError, what=what)
 
 
 def _media_duration_ms(path: Path) -> int:
     """音/视频通吃：读容器里的时长（ffprobe）。"""
 
-    try:
-        completed = subprocess.run(
-            [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", str(path)],
-            capture_output=True,
-        )
-    except FileNotFoundError as exc:
-        raise DubError("找不到 ffprobe，请确认已装 ffmpeg 并加入 PATH") from exc
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise DubError(f"读不出时长（{path.name}）：{detail or '未知错误'}")
-    info = json.loads(completed.stdout.decode("utf-8", "replace")).get("format", {})
-    if not info.get("duration"):
-        raise DubError(f"读不出时长（{path.name}）")
-    return round(float(info["duration"]) * 1000)
+    return media.duration_ms(path, error_cls=DubError, what=f"读不出时长（{path.name}）")
 
 
 def _synth_with_retries(
@@ -397,16 +375,19 @@ def _write_wav(path: Path, samples: array.array, sample_rate: int) -> None:
 
 
 def _video_codec(path: Path) -> str:
-    completed = subprocess.run(
-        [FFPROBE, "-v", "error", "-print_format", "json", "-show_streams", str(path)],
-        capture_output=True,
+    payload = media.ffprobe_json(
+        path,
+        error_cls=DubError,
+        streams=True,
+        show_format=False,
+        what=f"读不出视频流信息（{path.name}）",
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise DubError(f"读不出视频流信息（{path.name}）：{detail or '未知错误'}")
-    streams = json.loads(completed.stdout.decode("utf-8", "replace")).get("streams", [])
-    for stream in streams:
-        if stream.get("codec_type") == "video" and not stream.get("disposition", {}).get("attached_pic"):
+    for stream in payload.get("streams") or []:
+        if not isinstance(stream, dict):
+            continue
+        disposition = stream.get("disposition") or {}
+        attached_pic = isinstance(disposition, dict) and disposition.get("attached_pic")
+        if stream.get("codec_type") == "video" and not attached_pic:
             return str(stream.get("codec_name") or "unknown")
     raise DubError(f"输入里没有视频流：{path}")
 

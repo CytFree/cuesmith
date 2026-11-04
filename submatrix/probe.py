@@ -14,13 +14,13 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 from . import __version__
+from . import media
 from .report import OutputFile, file_digest
 from .srt import load_srt
 
@@ -43,9 +43,6 @@ __all__ = [
     "probe_media",
     "run_probe",
 ]
-
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
 
 # 能被 ffmpeg 直接转成 SRT 的文本型字幕
 TEXT_SUBTITLE_CODECS = frozenset({"subrip", "ass", "ssa", "mov_text", "webvtt", "text"})
@@ -252,32 +249,9 @@ def parse_probe(path: Path | str, payload: dict) -> MediaProbe:
 
 
 def ffprobe_json(path: Path) -> dict:
-    try:
-        completed = subprocess.run(
-            [
-                FFPROBE,
-                "-v",
-                "error",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                str(path),
-            ],
-            capture_output=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise ProbeError("找不到 ffprobe，请确认已装 ffmpeg 并加入 PATH") from exc
+    """ffprobe 全量元数据（路由判定用）：容器信息 + 所有流。"""
 
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise ProbeError(f"ffprobe 读不了 {path}：{detail or '未知错误'}")
-
-    try:
-        return json.loads(completed.stdout.decode("utf-8", "replace"))
-    except json.JSONDecodeError as exc:
-        raise ProbeError(f"ffprobe 输出不是合法 JSON：{exc}") from exc
+    return media.ffprobe_json(path, error_cls=ProbeError, streams=True)
 
 
 def probe_media(path: Path) -> MediaProbe:
@@ -395,33 +369,23 @@ def extract_to_srt(probe: MediaProbe, decision: RouteDecision, out_path: Path) -
         raise ExtractionError("路由判定没有给出字幕流序号，无法抽取")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        completed = subprocess.run(
-            [
-                FFMPEG,
-                "-nostdin",
-                "-v",
-                "error",
-                "-y",
-                "-i",
-                str(probe.path),
-                "-map",
-                f"0:s:{decision.subtitle_ordinal}",
-                "-c:s",
-                "srt",
-                "-f",
-                "srt",
-                str(out_path),
-            ],
-            capture_output=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise ExtractionError("找不到 ffmpeg，请确认已装 ffmpeg 并加入 PATH") from exc
-
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()
-        raise ExtractionError(f"ffmpeg 抽取字幕失败：{detail or '未知错误'}")
+    media.run_ffmpeg(
+        [
+            "-i",
+            str(probe.path),
+            "-map",
+            f"0:s:{decision.subtitle_ordinal}",
+            "-c:s",
+            "srt",
+            "-f",
+            "srt",
+            str(out_path),
+        ],
+        error_cls=ExtractionError,
+        what="ffmpeg 抽取字幕",
+        # -nostdin：抽取时不碰 stdin，避免批处理里被 ffmpeg 抢走输入
+        global_flags=("-nostdin", "-v", "error", "-y"),
+    )
 
 
 def build_manifest(

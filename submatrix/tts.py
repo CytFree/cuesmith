@@ -14,13 +14,19 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
+
+from .interpreters import (
+    MISSING_CURRENT,
+    Requirement,
+    bool_probe,
+    resolve,
+)
 
 __all__ = [
     "BASE_SPEECH_CPS",
@@ -130,6 +136,15 @@ def _probe_edge_tts(python: str) -> bool:
     return completed.returncode == 0
 
 
+_EDGE_TTS_PYTHON = Requirement(
+    label="edge-tts",
+    module="edge_tts",
+    parameter="--tts-python",
+    env_var="SUBMATRIX_TTS_PYTHON",
+    hint="或先建好 spike/.venv311 并 pip install edge-tts==7.3.1。",
+)
+
+
 def find_edge_tts_python(
     explicit: str | None = None,
     *,
@@ -140,20 +155,22 @@ def find_edge_tts_python(
 
     顺序：显式 ``--tts-python`` → 环境变量 ``SUBMATRIX_TTS_PYTHON`` →
     当前解释器 → 仓库已知 venv（``spike/.venv311``、``pyvideotrans/.venv`` 等）。
-    显式值不做探测（尊重用户选择，真跑不通会在合成时报错）。
+    显式值与环境变量不做探测（尊重用户选择，真跑不通会在合成时报错）。
     """
 
-    if explicit:
-        return explicit
-    configured = os.environ.get("SUBMATRIX_TTS_PYTHON")
-    if configured:
-        return configured
     check = probe or _probe_edge_tts
-    ordered: list[str] = [sys.executable, *(candidates if candidates is not None else _candidate_pythons())]
-    for python in dict.fromkeys(ordered):
-        if check(python):
-            return python
-    return sys.executable
+    ordered = [sys.executable, *(candidates if candidates is not None else _candidate_pythons())]
+    found = resolve(
+        _EDGE_TTS_PYTHON,
+        explicit,
+        candidates=ordered,
+        probe=bool_probe(check),
+        on_missing=MISSING_CURRENT,
+        trust_explicit=True,
+        trust_env=True,
+        error_cls=TtsError,
+    )
+    return found if found is not None else sys.executable
 
 
 @lru_cache(maxsize=1)
