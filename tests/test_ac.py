@@ -90,7 +90,7 @@ def test_ac5_nothing_is_auto_corrected(tmp_path) -> None:
     src.write_text(dump_srt(VIOLATION_SRC), encoding="utf-8", newline="\n")
     tgt.write_text(dump_srt(VIOLATION_TGT), encoding="utf-8", newline="\n")
 
-    result = run_matrix(MatrixOptions(src=src, tgt=tgt, out=tmp_path / "out"))
+    run_matrix(MatrixOptions(src=src, tgt=tgt, out=tmp_path / "out"))
     mono = parse_srt((tmp_path / "out" / "en.srt").read_text(encoding="utf-8"))
 
     assert len(mono) == len(VIOLATION_TGT)

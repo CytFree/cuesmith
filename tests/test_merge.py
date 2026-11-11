@@ -12,7 +12,6 @@ M0 实测的动机：Whisper 产出 2–3 秒的碎片 cue，直接拿去翻译+
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 
 import pytest
 

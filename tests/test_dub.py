@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import array
+import importlib.util
 import json
 import math
 import shutil
@@ -733,12 +734,17 @@ def test_command_engine_runs_external_command(tmp_path) -> None:
 
 
 def test_edge_engine_reports_missing_package(tmp_path) -> None:
+    """缺 edge-tts 时，引擎要提示"没装包"，而不是丢一个裸的非零返回码。
+
+    本机装了 edge-tts 就显式 skip：这条验的是**缺包**路径，包在就根本走不到——
+    以前写成 try/import 时，装了包的机器上这个用例其实什么都没断（假通过）。
+    """
+
     engine = EdgeTtsEngine(python=sys.executable, voice="en-US-AriaNeural")
-    try:
-        import edge_tts  # noqa: F401
-    except ImportError:
-        with pytest.raises(TtsError, match="edge-tts"):
-            engine.synthesize("hello", tmp_path / "cue.mp3")
+    if importlib.util.find_spec("edge_tts") is not None:
+        pytest.skip("本机已装 edge-tts，无法复现缺包路径")
+    with pytest.raises(TtsError, match="edge-tts"):
+        engine.synthesize("hello", tmp_path / "cue.mp3")
 
 
 def test_options_validate_rejects_bad_values(tmp_path) -> None:

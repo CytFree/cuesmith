@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from submatrix import pipeline as pipeline_module
-from submatrix.asr import AsrError, local_models, model_variant, preferred_model
+from submatrix.asr import model_variant, preferred_model
 from submatrix.cli import build_parser
 from submatrix.diarize import SpeakerTurn, write_segments
 from submatrix.glossary import Glossary, Term, glossary_fingerprint

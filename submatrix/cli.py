@@ -14,11 +14,9 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
-from . import __version__
 from .asr import AsrError, AsrOptions, AsrResult, run_asr
 from .burn import PRESETS, BurnError, BurnOptions, BurnResult, run_burn
 from .cost import (
@@ -64,8 +62,7 @@ from .pipeline import (
     run_pipeline,
 )
 from .probe import ProbeError, ProbeOptions, ProbeResult, run_probe
-from .report import file_digest
-from .srt import SrtParseError, dump_srt, load_srt
+from .srt import SrtParseError
 from .translate import (
     LlmConfig,
     TranslateError,

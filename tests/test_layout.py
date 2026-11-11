@@ -11,15 +11,11 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
-
 import pytest
 
 from submatrix.layout import (
     FUNCTION_WORDS,
     LayoutOptions,
-    LayoutStats,
     layout_pair,
     wrap_text,
 )

@@ -79,7 +79,7 @@ _COMMA_GLUE = re.compile(r"([,;:])(?=[A-Za-z0-9])")
 _LONE_I = re.compile(r"(?<![A-Za-z])i(?![A-Za-z])")
 _CJK_CHARS = r"\u3400-\u4dbf\u4e00-\u9fff"
 _SPACE_BETWEEN_CJK = re.compile(rf"(?<=[{_CJK_CHARS}])\s+(?=[{_CJK_CHARS}])")
-_SPACE_BEFORE_CJK_PUNCT = re.compile(rf"\s+(?=[，。！？；：、])")
+_SPACE_BEFORE_CJK_PUNCT = re.compile(r"\s+(?=[，。！？；：、])")
 # 口吃式重复：3 字及以上的片段连续出现两次以上 → 折叠成一次（两字重复是正常表达，不动）
 _CJK_REPEAT = re.compile(r"([\u3400-\u4dbf\u4e00-\u9fff]{3,12}?)\1+")
 # 中文 ASR 常见半角标点（含标点后的空格）
