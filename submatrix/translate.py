@@ -1364,43 +1364,139 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
     actions: dict[str, int] = {}
     for result in condense_results:
         actions[result.action] = actions.get(result.action, 0) + 1
-
     rewriter_kind = "llm" if rewriter is not None else "rules"
-    # trim / llm 都改写了句子，必须有人看一眼；rule 只删口头禅，无需抽检
-    needs_review = [
-        {
-            "cue": index + 1,
-            "action": result.action,
-            "before_chars": result.before_chars,
-            "after_chars": result.after_chars,
-            "text": result.text,
-        }
-        for index, result in enumerate(condense_results)
-        if result.action in {"trim", "llm"}
-    ]
 
-    warnings: list[str] = list(dict.fromkeys(fallback_notes))
+    outcome = _Outcome(
+        subtitle=subtitle,
+        encoding=encoding,
+        cues=cues,
+        final_texts=final_texts,
+        pre_condense=pre_condense,
+        condense_results=condense_results,
+        actions=actions,
+        rewriter_kind=rewriter_kind,
+        sentences=sentences_total,
+        paragraphs=paragraphs_total,
+        fallback_cues=fallback_cues,
+        lost_terms=lost_terms,
+        review_changed=review_changed,
+        review_changes=review_changes,
+        review_passes=review_passes,
+        review_failed=review_failed,
+        fallback_notes=fallback_notes,
+        working=working,
+        primary=primary,
+        output_path=output_path,
+        target_cps=target_cps,
+        cue_budgets=cue_budgets,
+        dub_budgets=dub_budgets,
+        wall=wall,
+    )
+    warnings, dub_summary, cps_stats = _translate_warnings(
+        options, outcome, cjk=tgt_profile.cjk
+    )
+    report = _translate_report(
+        options,
+        outcome,
+        warnings=warnings,
+        dub_summary=dub_summary,
+        cps=cps_stats,
+        cjk=tgt_profile.cjk,
+    )
+    report_path = out_dir / "translate.json"
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    return TranslateResult(
+        status=str(report["status"]),
+        exit_code=EXIT_OK,
+        report=report,
+        report_path=report_path.resolve(),
+        output_path=output_path.resolve(),
+        cues=len(cues),
+    )
+
+
+
+
+@dataclass(slots=True)
+class _Outcome:
+    """一次翻译的成果与过程统计——写 ``translate.json`` 所需的全部结论。
+
+    以前这些是 ``run_translate`` 尾部的局部变量，报告字面量（165 行）直接伸手抓它们，
+    于是"翻译逻辑"和"报告契约"挤在同一屏里，改一个告警措辞得先分清哪些变量是翻译
+    过程、哪些只是报告字段。收成一个记录之后，报告组装就是纯数据变换。
+    """
+
+    subtitle: Subtitle
+    encoding: str
+    cues: list[Cue]
+    final_texts: list[str]
+    pre_condense: list[str]
+    condense_results: list[CondenseResult]
+    actions: dict[str, int]
+    rewriter_kind: str
+    sentences: int
+    paragraphs: int
+    fallback_cues: list[int]
+    lost_terms: list[Term]
+    review_changed: int
+    review_changes: list[dict[str, object]]
+    review_passes: int
+    review_failed: int
+    fallback_notes: list[str]
+    working: Translator
+    primary: Translator
+    output_path: Path
+    target_cps: float
+    cue_budgets: list[int]
+    dub_budgets: list[int] | None
+    wall: float
+
+
+def _translate_warnings(
+    options: TranslateOptions, outcome: _Outcome, *, cjk: bool
+) -> tuple[list[str], dict[str, object] | None, dict[str, object]]:
+    """把"这次翻译有什么需要用户注意的"汇总成告警。
+
+    返回 ``(告警, summary.dub_budget, CPS 统计)``：后两项和对应告警出自同一次测量，
+    分开各算一遍会让报告与告警口径漂移。
+    """
+
+    target_cps = outcome.target_cps
+    warnings: list[str] = list(dict.fromkeys(outcome.fallback_notes))
     # OPT-3：渠道回退要如实写进告警（用户得知道这次不是免费 MT 翻的）
-    fallback_events = list(getattr(working, "events", []))
-    for event in fallback_events:
+    for event in getattr(outcome.working, "events", []):
         warnings.append(
             f"翻译渠道 {event['from']} 失败（{str(event['error'])[:120]}），"
             f"已自动回退到 {event['to']}；前面已翻好的句子保留"
         )
-    active: Translator = working.active if isinstance(working, ResilientTranslator) else primary
-    if lost_terms:
-        unique = sorted({term.source for term in lost_terms})
-        warnings.append(f"机翻吃掉了 {len(lost_terms)} 处术语占位符：{'、'.join(unique)}")
-    after_stats = _cps_stats(cues, final_texts, cjk=tgt_profile.cjk, limit=target_cps)
+    if outcome.lost_terms:
+        unique = sorted({term.source for term in outcome.lost_terms})
+        warnings.append(
+            f"机翻吃掉了 {len(outcome.lost_terms)} 处术语占位符：{'、'.join(unique)}"
+        )
+    after_stats = _cps_stats(
+        outcome.cues, outcome.final_texts, cjk=cjk, limit=target_cps
+    )
     # 配音槽位容量：只统计"字幕能读完但 TTS 念不完"的条目（这才是配音溢出的根因）
     dub_summary: dict[str, object] | None = None
-    if dub_budgets is not None:
+    if outcome.dub_budgets is not None:
         over_capacity = [
             index
-            for index, (text, budget) in enumerate(zip(final_texts, dub_budgets), start=1)
-            if char_count(text or "", cjk=tgt_profile.cjk) > budget
+            for index, (text, budget) in enumerate(
+                zip(outcome.final_texts, outcome.dub_budgets), start=1
+            )
+            if char_count(text or "", cjk=cjk) > budget
         ]
-        narrowed = sum(1 for reading, dub in zip(cue_budgets, dub_budgets) if dub < reading)
+        narrowed = sum(
+            1
+            for reading, dub in zip(outcome.cue_budgets, outcome.dub_budgets)
+            if dub < reading
+        )
         dub_summary = {
             "capacity_cps": round(float(options.dub_cps_budget or 0.0), 2),
             "binds": "dubbing" if narrowed else "reading",
@@ -1416,25 +1512,62 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
             )
     if after_stats["over_limit"]:
         warnings.append(
-            f"{after_stats['over_limit']}/{len(cues)} 条超过目标 {target_cps:g} CPS："
+            f"{after_stats['over_limit']}/{len(outcome.cues)} 条超过目标 {target_cps:g} CPS："
             "源语速快时只能靠精简译文（condense）或延长显示时间"
         )
     if options.condense:
-        trimmed = actions.get("trim", 0)
+        trimmed = outcome.actions.get("trim", 0)
         if trimmed:
             warnings.append(
                 f"{trimmed} 条为压 CPS 被截断（trim 会丢信息，见 translate.json 的 needs_review）"
             )
-        if actions.get("unchanged", 0) and options.condense_mode in {"llm", "auto"}:
+        if outcome.actions.get("unchanged", 0) and options.condense_mode in {"llm", "auto"}:
             warnings.append("有条目精简未生效，已如实保留原译文（不硬压）")
     else:
         warnings.append("已用 --no-condense 关闭精简：超 CPS 条目原样保留")
-    if review_failed:
-        warnings.append(f"{review_failed} 段审校失败，已保留初译（未经二遍校对）")
+    if outcome.review_failed:
+        warnings.append(
+            f"{outcome.review_failed} 段审校失败，已保留初译（未经二遍校对）"
+        )
+    return warnings, dub_summary, after_stats
 
+
+def _translate_report(
+    options: TranslateOptions,
+    outcome: _Outcome,
+    *,
+    warnings: list[str],
+    dub_summary: dict[str, object] | None,
+    cps: dict[str, object],
+    cjk: bool,
+) -> dict[str, object]:
+    """组装 ``translate.json``：输入指纹、生效配置、逐条结论统计。
+
+    ``status`` 由告警决定：有告警就是 warn（译文可用，但用户需要知道发生了什么）。
+    """
+
+    target_cps = outcome.target_cps
+    # trim / llm 都改写了句子，必须有人看一眼；rule 只删口头禅，无需抽检
+    needs_review = [
+        {
+            "cue": index + 1,
+            "action": result.action,
+            "before_chars": result.before_chars,
+            "after_chars": result.after_chars,
+            "text": result.text,
+        }
+        for index, result in enumerate(outcome.condense_results)
+        if result.action in {"trim", "llm"}
+    ]
+    fallback_events = list(getattr(outcome.working, "events", []))
+    active: Translator = (
+        outcome.working.active
+        if isinstance(outcome.working, ResilientTranslator)
+        else outcome.primary
+    )
     generated_at = options.generated_at or datetime.now().astimezone()
     size, digest = file_digest(Path(options.src))
-    report: dict[str, object] = {
+    return {
         "schema_version": 1,
         "tool": "submatrix",
         "version": __version__,
@@ -1443,8 +1576,8 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         "status": "warn" if warnings else "ok",
         "input": {
             "path": str(Path(options.src).resolve()),
-            "encoding": encoding,
-            "cues": len(subtitle),
+            "encoding": outcome.encoding,
+            "cues": len(outcome.subtitle),
             "lang": options.src_lang,
             "bytes": size,
             "sha256": digest,
@@ -1452,7 +1585,7 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         "config": {
             # provider 记**实际干活**的渠道（回退到 LLM 时成本才按 token 算），primary 另记
             "provider": active.name,
-            "provider_primary": primary.name,
+            "provider_primary": outcome.primary.name,
             "provider_fallback": {
                 "allowed": options.fallback_provider,
                 "events": fallback_events,
@@ -1468,15 +1601,17 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
             "paragraph_max_chars": options.paragraph_max_chars,
             "paragraph_gap_ms": options.paragraph_gap_ms,
             "glossary": {
-                "path": str(glossary.path) if glossary and glossary.path else None,
-                "terms": len(glossary) if glossary else 0,
+                "path": str(options.glossary.path)
+                if options.glossary and options.glossary.path
+                else None,
+                "terms": len(options.glossary) if options.glossary else 0,
                 # 内容指纹：改了同一个术语表文件里的译法（条数不变）也要让缓存失效
-                "fingerprint": glossary_fingerprint(glossary),
+                "fingerprint": glossary_fingerprint(options.glossary),
             },
             "condense": {
                 "enabled": options.condense,
                 "mode": options.condense_mode if options.condense else None,
-                "rewriter": rewriter_kind if options.condense else None,
+                "rewriter": outcome.rewriter_kind if options.condense else None,
                 "target_cps": target_cps,
                 "dub_cps_budget": float(options.dub_cps_budget)
                 if options.dub_cps_budget
@@ -1493,57 +1628,44 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         "outputs": [
             {
                 "kind": "translation_srt",
-                "path": str(output_path.resolve()),
-                "cues": len(cues),
-                "bytes": output_path.stat().st_size,
+                "path": str(outcome.output_path.resolve()),
+                "cues": len(outcome.cues),
+                "bytes": outcome.output_path.stat().st_size,
             }
         ],
         "summary": {
-            "cues": len(cues),
-            "sentences": sentences_total,
-            "paragraphs": paragraphs_total,
-            "fallback_cues": len(fallback_cues),
+            "cues": len(outcome.cues),
+            "sentences": outcome.sentences,
+            "paragraphs": outcome.paragraphs,
+            "fallback_cues": len(outcome.fallback_cues),
             "provider_fallback": len(fallback_events),
-            "glossary_terms": len(glossary) if glossary else 0,
-            "placeholder_lost": len(lost_terms),
+            "glossary_terms": len(options.glossary) if options.glossary else 0,
+            "placeholder_lost": len(outcome.lost_terms),
             "condense": {
                 "triggered": sum(
-                    1 for result in condense_results if result.action not in {"none", "unchanged"}
+                    1
+                    for result in outcome.condense_results
+                    if result.action not in {"none", "unchanged"}
                 ),
-                "by_action": dict(sorted(actions.items())),
-                "saved_chars": sum(result.saved for result in condense_results),
+                "by_action": dict(sorted(outcome.actions.items())),
+                "saved_chars": sum(result.saved for result in outcome.condense_results),
                 "needs_review": needs_review,
             },
             "review": {
                 "enabled": options.llm_review,
-                "passes": review_passes,
-                "cues_changed": review_changed,
-                "changes": review_changes,
+                "passes": outcome.review_passes,
+                "cues_changed": outcome.review_changed,
+                "changes": outcome.review_changes,
             },
             "cps_before_condense": _cps_stats(
-                cues, pre_condense, cjk=tgt_profile.cjk, limit=target_cps
+                outcome.cues, outcome.pre_condense, cjk=cjk, limit=target_cps
             ),
-            "cps": after_stats,
+            "cps": cps,
             "dub_budget": dub_summary,
-            "wall_s": round(wall, 1),
+            "wall_s": round(outcome.wall, 1),
         },
         "warnings": warnings,
     }
-    report_path = out_dir / "translate.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-
-    return TranslateResult(
-        status=str(report["status"]),
-        exit_code=EXIT_OK,
-        report=report,
-        report_path=report_path.resolve(),
-        output_path=output_path.resolve(),
-        cues=len(cues),
-    )
 
 
 def _build_rewriter(
