@@ -93,7 +93,12 @@ class _Parser(argparse.ArgumentParser):
         raise UsageError(message)
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser() -> _Parser:
+    """构建 CLI 解析器：每个子命令的参数在各自的 ``_add_*_args`` 里。
+
+    这里只负责三件事：建根解析器、挂子命令分发、按顺序把每个子命令的参数表接上来。
+    """
+
     parser = _Parser(
         prog="submatrix",
         description=(
@@ -102,6 +107,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
+    _add_build_args(subparsers)
+    _add_probe_args(subparsers)
+    _add_mark_args(subparsers)
+    _add_asr_args(subparsers)
+    _add_translate_args(subparsers)
+    _add_merge_args(subparsers)
+    _add_diarize_args(subparsers)
+    _add_dub_args(subparsers)
+    _add_burn_args(subparsers)
+    _add_pipeline_args(subparsers)
+    _add_cost_args(subparsers)
+    _add_gui_args(subparsers)
+    _add_history_args(subparsers)
+
+    return parser
+
+
+def _add_build_args(subparsers: argparse._SubParsersAction) -> None:
+    """``build``：校验一对字幕并导出单语/双语 SRT、ASS、VTT、TXT（只报不改）。"""
 
     build = subparsers.add_parser(
         "build",
@@ -128,6 +152,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="开启排版：自动折行 + 超过行数就切条（默认只报不改）",
     )
 
+
+def _add_probe_args(subparsers: argparse._SubParsersAction) -> None:
+    """``probe``：探测视频流与字幕轨，内封文本字幕直出 ``source.srt``。"""
+
     probe = subparsers.add_parser(
         "probe",
         help="探测视频的流与字幕轨，直出内封字幕 SRT（或判定走 ASR）",
@@ -144,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="只探测与判定，不抽字幕（大文件先看路由结论时用）",
     )
+
+
+def _add_mark_args(subparsers: argparse._SubParsersAction) -> None:
+    """``mark``：AIGC 标识——起始画面显式标识 + 文件元数据隐式标识。"""
 
     mark = subparsers.add_parser(
         "mark",
@@ -172,6 +204,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="仅自用模式：不打标、写留痕日志（不得公开发布）",
     )
+
+
+def _add_asr_args(subparsers: argparse._SubParsersAction) -> None:
+    """``asr``：语音识别（词级时间戳 + 热词偏置 + 按语义切条）。"""
 
     asr = subparsers.add_parser(
         "asr",
@@ -204,6 +240,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-duration", type=float, default=0.8, help="单条最短时长（秒，过短会并入相邻条）"
     )
     asr.add_argument("--keep-raw", action="store_true", help="保留 worker 原始输出（排查用）")
+
+
+def _add_translate_args(subparsers: argparse._SubParsersAction) -> None:
+    """``translate``：翻译编排（术语表 + 段落上下文 + 译后精简 + CPS 报告）。"""
 
     translate = subparsers.add_parser(
         "translate",
@@ -278,6 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="渠道回退（默认 auto）：免费 MT 网络失败自动切备用渠道（已配置的 LLM/命令模板）；off 只重试不换渠道",
     )
 
+
+def _add_merge_args(subparsers: argparse._SubParsersAction) -> None:
+    """``merge``：把 ASR 的碎片 cue 合并成句子级 cue（配音前必做）。"""
+
     merge = subparsers.add_parser(
         "merge",
         help="ASR 碎片句级合并（配音前必做）",
@@ -290,6 +334,10 @@ def build_parser() -> argparse.ArgumentParser:
     merge.add_argument("--out", required=True, type=Path, help="输出目录")
     merge.add_argument("--max-duration", type=float, default=12.0, help="单条时长上限（秒）")
     merge.add_argument("--max-gap", type=float, default=1.0, help="相邻碎片最大间隔（秒）")
+
+
+def _add_diarize_args(subparsers: argparse._SubParsersAction) -> None:
+    """``diarize``：说话人分离（多人声），产出说话人分段与字幕归属。"""
 
     diarize = subparsers.add_parser(
         "diarize",
@@ -346,6 +394,10 @@ def build_parser() -> argparse.ArgumentParser:
     diarize.add_argument("--min-duration-on", type=float, default=0.3)
     diarize.add_argument("--min-duration-off", type=float, default=0.5)
     diarize.add_argument("--threads", type=int, default=0, help="推理线程数（0 = 1）")
+
+
+def _add_dub_args(subparsers: argparse._SubParsersAction) -> None:
+    """``dub``：配音编排（并发合成 + 重试 + 时长校验 + 溢出吸收 + 可选 BGM）。"""
 
     dub = subparsers.add_parser(
         "dub",
@@ -458,6 +510,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--separator-python", default=None, help="装有 demucs 的 Python（默认找 spike/demucs 环境）"
     )
 
+
+def _add_burn_args(subparsers: argparse._SubParsersAction) -> None:
+    """``burn``：把字幕烧进画面，出带硬字幕的成片。"""
+
     burn = subparsers.add_parser(
         "burn",
         help="把字幕烧进视频（出带硬字幕的成片）",
@@ -487,6 +543,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="烧录后比对像素差核验（默认开）",
     )
+
+
+def _add_pipeline_args(subparsers: argparse._SubParsersAction) -> None:
+    """``pipeline``：一条命令跑完整链路（本工具的主入口）。"""
 
     pipeline = subparsers.add_parser(
         "pipeline",
@@ -700,6 +760,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="成本价表 JSON（覆盖内置示例价；深合并）",
     )
 
+
+def _add_cost_args(subparsers: argparse._SubParsersAction) -> None:
+    """``cost``：按价表折算一次 pipeline 的外部服务成本。"""
+
     cost_parser = subparsers.add_parser(
         "cost",
         help="汇总一次 pipeline 产物的外部服务成本（读 pipeline.json 的 cost 块）",
@@ -721,6 +785,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cost_parser.add_argument("--json", action="store_true", help="输出 cost 块 JSON")
 
+
+def _add_gui_args(subparsers: argparse._SubParsersAction) -> None:
+    """``gui``：启动本地 Web GUI（可选依赖 gradio）。"""
+
     gui_parser = subparsers.add_parser(
         "gui",
         help="启动本地 Web GUI（Gradio，可选依赖；默认只监听本机）",
@@ -740,6 +808,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="额外允许预览/下载的目录（可多次；默认仓库目录 + 用户主目录）",
     )
 
+
+def _add_history_args(subparsers: argparse._SubParsersAction) -> None:
+    """``history``：查看/清理 GUI 任务历史（sqlite）。"""
+
     history_parser = subparsers.add_parser(
         "history",
         help="查看/清理 GUI 任务历史（sqlite，默认 work/history.db）",
@@ -752,7 +824,6 @@ def build_parser() -> argparse.ArgumentParser:
     history_parser.add_argument("--limit", type=int, default=20, help="最多显示多少条（默认 20）")
     history_parser.add_argument("--json", action="store_true", help="输出 JSON 数组")
     history_parser.add_argument("--delete", type=int, default=None, metavar="ID", help="删除指定 id 的记录")
-    return parser
 
 
 def _print_summary(result: MatrixResult) -> None:
