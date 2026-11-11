@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,7 +28,6 @@ from .srt import load_srt
 
 __all__ = ["BurnError", "BurnOptions", "BurnResult", "run_burn"]
 
-FFMPEG = media.FFMPEG
 PRESETS = (
     "ultrafast",
     "superfast",
@@ -88,12 +86,6 @@ class BurnResult:
 
 
 # ---------------------------------------------------------------------- 工具
-
-
-def _run(command: list[str], *, what: str) -> "subprocess.CompletedProcess[bytes]":
-    """跑一条完整的 ffmpeg 命令（首项已是可执行文件名）。"""
-
-    return media.exec_tool(command, error_cls=BurnError, what=what)
 
 
 def _filter_path(path: Path) -> str:
@@ -270,19 +262,28 @@ def run_burn(options: BurnOptions) -> BurnResult:
     input_duration = _duration_ms(video_info)
 
     out_video = out_dir / "burned.mp4"
-    _run(
+    # 全局参数（-v error -y）由 media.run_ffmpeg 统一前置，这里只给输入/滤镜/编码参数
+    media.run_ffmpeg(
         [
-            FFMPEG, "-v", "error", "-y",
-            "-i", str(video),
-            "-vf", f"ass={_filter_path(ass_path)}",
-            "-c:v", "libx264",
-            "-crf", str(options.crf),
-            "-preset", options.preset,
-            "-pix_fmt", "yuv420p",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
+            "-i",
+            str(video),
+            "-vf",
+            f"ass={_filter_path(ass_path)}",
+            "-c:v",
+            "libx264",
+            "-crf",
+            str(options.crf),
+            "-preset",
+            options.preset,
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
             str(out_video),
         ],
+        error_cls=BurnError,
         what="字幕烧录",
     )
 

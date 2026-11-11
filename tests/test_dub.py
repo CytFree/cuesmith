@@ -371,6 +371,38 @@ def test_adaptive_rate_escalates_instead_of_manual(tmp_path, monkeypatch) -> Non
     assert "+30%" in base_engine.calls
 
 
+def test_escalated_cue_is_not_counted_as_reused(tmp_path, monkeypatch) -> None:
+    """基线音频命中缓存、随后被提语速重合成：这条必须记成"没复用"。
+
+    真实场景：上一轮的原速音频还在 ``out/tts/`` 里，这一轮槽位变紧，代码提了一档语速
+    重新合成——实际用的是**新合成**的音频。若按基础语速去查内容指纹，就会把"重新
+    合成"记成"复用"：成本报表按字符计费，直接少算钱；``summary.reused`` 也就成了假数。
+    """
+
+    srt = tmp_path / "en.srt"
+    # 第一轮：4s 槽位放得下 3.2s 的原速音频 → 不提语速，原速文件进 cache
+    write_srt(srt, "1\n00:00:00,000 --> 00:00:04,000\nToo long\n")
+    monkeypatch.setattr(
+        dub_module,
+        "build_engine",
+        lambda options, voice=None, *, rate=None: RateAwareEngine(3200, rate),  # noqa: ARG005
+    )
+    out = tmp_path / "out"
+    first = dub(srt, out, RateAwareEngine(3200, "+30%"), tts_rate="+30%")
+    assert cue_reports(report_of(first))[1]["rate_escalated"] is False
+
+    # 第二轮：文案不变、槽位收紧到 2s → 提语速到 +65% 重新合成
+    write_srt(srt, "1\n00:00:00,000 --> 00:00:02,000\nToo long\n")
+    second = dub(srt, out, RateAwareEngine(3200, "+30%"), tts_rate="+30%")
+
+    report = report_of(second)
+    entry = cue_reports(report)[1]
+    assert entry["rate_escalated"] is True
+    assert entry["rate"] == "+65%"
+    assert entry["reused"] is False
+    assert report["summary"]["reused"] == 0
+
+
 def test_adaptive_rate_can_be_disabled(tmp_path) -> None:
     srt = write_srt(tmp_path / "en.srt", "1\n00:00:00,000 --> 00:00:02,000\nToo long\n")
     result = dub(

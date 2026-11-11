@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from submatrix import media as media_module
 from submatrix import pipeline as pipeline_module
 from submatrix.asr import model_variant, preferred_model
 from submatrix.cli import build_parser
@@ -712,6 +714,33 @@ def test_unsupported_route_fails_with_actionable_error(tmp_path, monkeypatch) ->
     failed = [stage for stage in report["stages"] if stage["status"] == "failed"]
     assert failed and "图形字幕" in failed[0]["error"]
     assert calls.order == ["probe"]
+
+
+def test_bad_ffprobe_json_is_recorded_as_failed_stage(tmp_path, monkeypatch) -> None:
+    """ffprobe 吐出坏 JSON 时，pipeline 要记 failed 并落盘，而不是崩在半路。
+
+    a6b207a 之前这里是裸 ``json.loads``：``JSONDecodeError``（ValueError）穿透
+    ``except (ProbeError, PipelineError, OSError)``，整条 pipeline 崩掉、连
+    ``pipeline.json`` 都不写——用户拿不到任何可诊断的信息。现在 media 层把它翻成
+    各自的 error_cls，probe 阶段按普通失败收尾。
+    """
+
+    src = make_src(tmp_path)
+    out = tmp_path / "out"
+
+    def garbage(argv, **_kwargs):  # noqa: ANN001, ANN202
+        return subprocess.CompletedProcess(argv, 0, b"{not json", b"")
+
+    monkeypatch.setattr(media_module, "run_ffprobe", garbage)
+
+    result = run_pipeline(PipelineOptions(src=src, out=out, src_lang="en"))
+
+    assert result.status == "failed"
+    assert result.exit_code == 2
+    assert (out / "pipeline.json").is_file()
+    stages = {stage["stage"]: stage for stage in result.report["stages"]}
+    assert stages["probe"]["status"] == "failed"
+    assert "JSON" in stages["probe"]["error"]
 
 
 def test_llm_without_key_fails_before_calling_translator(tmp_path, monkeypatch) -> None:

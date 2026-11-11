@@ -37,7 +37,6 @@ from . import __version__
 from . import media
 from .interpreters import (
     Requirement,
-    missing_message,
     ordered_candidates,
     python_in_venv,
     resolve,
@@ -273,8 +272,8 @@ def find_diarization_python(
         probe=runner_probe(run, _DIARIZE_PYTHON.module),
         error_cls=DiarizeError,
     )
-    if found is None:  # on_missing=raise 时走不到，防御性兜底
-        raise DiarizeError(missing_message(_DIARIZE_PYTHON, ()))
+    if found is None:  # 契约上走不到：on_missing=raise 要么返回解释器、要么已抛错
+        raise DiarizeError("内部错误：解释器探测既没返回结果也没报错")
     return found
 
 

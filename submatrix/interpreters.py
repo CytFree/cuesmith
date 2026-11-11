@@ -21,10 +21,11 @@ demucs      **返回 None**                    探测
 
 分工边界
 --------
-- **本模块**：候选去重与顺序、是否信任显式值/环境变量、探测、探测失败时怎么报、
-  找不到时是抛错/返回 None/退回当前解释器。
-- **各组件**：候选路径（哪些 venv 值得看）、探针（`import xxx`）、给用户的安装提示。
-  这些是真正的领域数据，不该被抽象掉。
+- **本模块**：候选去重与顺序、是否信任显式值/环境变量、探测本体（跑
+  ``[python, -c, "import xxx"]`` 的那个子进程）、探测失败时怎么报、找不到时是
+  抛错/返回 None/退回当前解释器。
+- **各组件**：候选路径（哪些 venv 值得看）、探哪个模块、探针等多久、给用户的安装
+  提示。这些是真正的领域数据，不该被抽象掉。
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ __all__ = [
     "python_in_venv",
     "resolve",
     "runner_probe",
+    "subprocess_probe",
 ]
 
 MISSING_RAISE = "raise"  # 抛 error_cls（组件缺了就跑不了）
@@ -122,6 +124,28 @@ def runner_probe(
         return False, (lines[-1] if lines else "import 失败")[:160]
 
     return probe
+
+
+def subprocess_probe(module: str, *, timeout_s: float = 60.0) -> Probe:
+    """直接起子进程问一句"这个解释器装了 <module> 吗"。
+
+    与 :func:`runner_probe` 是同一份实现，只是 runner 用默认的 ``subprocess.run``，
+    所以 tts / localtts / bgm 不再各自抄一遍。``timeout_s`` 留给组件按自己的耐心传
+    （Edge 的 venv 在慢盘上启动要十几秒）。
+    """
+
+    def runner(argv: Sequence[str]) -> "subprocess.CompletedProcess[str]":
+        return subprocess.run(  # noqa: S603 - 固定 -c 探针，参数是本机路径
+            list(argv),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_s,
+            check=False,
+        )
+
+    return runner_probe(runner, module)
 
 
 def missing_message(requirement: Requirement, attempts: Sequence[tuple[str, str]]) -> str:

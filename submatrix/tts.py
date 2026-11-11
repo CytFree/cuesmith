@@ -26,6 +26,7 @@ from .interpreters import (
     Requirement,
     bool_probe,
     resolve,
+    subprocess_probe,
 )
 
 __all__ = [
@@ -123,17 +124,16 @@ def _candidate_pythons() -> list[str]:
     return candidates
 
 
+_EDGE_TTS_PROBE = subprocess_probe("edge_tts", timeout_s=30.0)
+
+
 def _probe_edge_tts(python: str) -> bool:
-    try:
-        completed = subprocess.run(  # noqa: S603 - 固定 -c 探针，参数是本机路径
-            [python, "-c", "import edge_tts"],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return completed.returncode == 0
+    """``[python, -c, "import edge_tts"]`` 探针（本体在 ``interpreters.subprocess_probe``）。
+
+    超时沿用原实现的 30s；本地 TTS / demucs 的候选目录更大，那边用 60s。
+    """
+
+    return _EDGE_TTS_PROBE(python)[0]
 
 
 _EDGE_TTS_PYTHON = Requirement(
@@ -170,7 +170,8 @@ def find_edge_tts_python(
         trust_env=True,
         error_cls=TtsError,
     )
-    return found if found is not None else sys.executable
+    # MISSING_CURRENT 时 resolve 自己就退回 sys.executable；这里再兜一次是同值防御
+    return found or sys.executable
 
 
 @lru_cache(maxsize=1)

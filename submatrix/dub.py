@@ -15,7 +15,6 @@ from __future__ import annotations
 import array
 import hashlib
 import json
-import subprocess
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -313,14 +312,14 @@ def _load_speaker_assignments(path: Path) -> tuple[dict[int, str], dict[str, str
     return mapping, speakers, warnings
 
 
-def _run(command: list[str], *, what: str) -> "subprocess.CompletedProcess[bytes]":
-    return media.run_ffmpeg(command, error_cls=DubError, what=what)
-
-
 def _media_duration_ms(path: Path) -> int:
-    """音/视频通吃：读容器里的时长（ffprobe）。"""
+    """音/视频通吃：读容器里的时长（ffprobe）。
 
-    return media.duration_ms(path, error_cls=DubError, what=f"读不出时长（{path.name}）")
+    ``what`` 只在**读失败**时被拼进错误（``f"{what}失败：detail"``）；时长字段缺失
+    走 ``media.duration_ms`` 自己的文案。两种都进 ``dub_report`` 的逐条 error。
+    """
+
+    return media.duration_ms(path, error_cls=DubError, what=f"读时长（{path.name}）")
 
 
 def _synth_with_retries(
@@ -358,7 +357,7 @@ def _decode_to_pcm(path: Path, tempo: float, sample_rate: int) -> array.array:
     if abs(tempo - 1.0) > 1e-6:
         command += ["-filter:a", f"atempo={tempo:.4f}"]
     command += ["-ar", str(sample_rate), "-ac", "1", "-f", "wav", str(target)]
-    _run(command, what=f"解码 {path.name}")
+    media.run_ffmpeg(command, error_cls=DubError, what=f"解码 {path.name}")
 
     with wave.open(str(target), "rb") as handle:
         frames = handle.readframes(handle.getnframes())
@@ -1097,13 +1096,17 @@ def _mux_video(session: _Session, mux_audio: Path) -> tuple[Path | None, bool]:
     ]
     try:
         if _video_codec(Path(options.video)) == "h264":
-            _run([*head, "-c:v", "copy", str(video_path)], what="合成配音视频")
+            media.run_ffmpeg(
+                [*head, "-c:v", "copy", str(video_path)],
+                error_cls=DubError,
+                what="合成配音视频",
+            )
             return video_path, False
         raise DubError("源视频不是 h264，需要转码")
     except DubError:
         # VP9/HEVC/ProRes 等：统一转 h264，保证"h264 + aac"的成品口径（AC-14）
         video_path.unlink(missing_ok=True)
-        _run(
+        media.run_ffmpeg(
             [
                 *head,
                 "-c:v",
@@ -1116,6 +1119,7 @@ def _mux_video(session: _Session, mux_audio: Path) -> tuple[Path | None, bool]:
                 "yuv420p",
                 str(video_path),
             ],
+            error_cls=DubError,
             what="合成配音视频（视频转码）",
         )
         return video_path, True

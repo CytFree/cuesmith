@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 __all__ = [
+    "DEFAULT_FFMPEG_FLAGS",
     "FFMPEG",
     "FFPROBE",
     "STDERR_TAIL_CHARS",
@@ -40,6 +41,8 @@ __all__ = [
 FFMPEG = "ffmpeg"
 FFPROBE = "ffprobe"
 STDERR_TAIL_CHARS = 800
+# ffmpeg 的全局参数（安静 + 覆盖输出）：只在 run_ffmpeg 的默认值和各模块的转发里引用一次
+DEFAULT_FFMPEG_FLAGS = ("-v", "error", "-y")
 
 DEFAULT_MISSING_HINT = "找不到 {tool}，请确认已装 ffmpeg 并加入 PATH"
 
@@ -110,9 +113,14 @@ def run_ffmpeg(
     check: bool = True,
     timeout_s: float | None = None,
     env: Mapping[str, str] | None = None,
-    global_flags: Sequence[str] = ("-v", "error", "-y"),
+    global_flags: Sequence[str] = DEFAULT_FFMPEG_FLAGS,
+    missing_hint: str | None = None,
 ) -> "subprocess.CompletedProcess[bytes]":
-    """跑 ffmpeg：默认前置 ``-v error -y``，需要 ``-nostdin`` 等全局参数时传 ``global_flags``。"""
+    """跑 ffmpeg：默认前置 ``-v error -y``，需要 ``-nostdin`` 等全局参数时传 ``global_flags``。
+
+    ``global_flags`` 与缺工具提示都只在这里定义：调用方永远只给"输入/滤镜/编码"参数，
+    免得各模块又各拼一份 ``[FFMPEG, "-v", "error", "-y", ...]``。
+    """
 
     return exec_tool(
         [FFMPEG, *global_flags, *args],
@@ -121,6 +129,7 @@ def run_ffmpeg(
         check=check,
         timeout_s=timeout_s,
         env=env,
+        missing_hint=missing_hint,
     )
 
 

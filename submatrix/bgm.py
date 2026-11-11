@@ -26,6 +26,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Sequence
 
 from . import media
 from .interpreters import (
@@ -35,6 +36,7 @@ from .interpreters import (
     ordered_candidates,
     python_in_venv,
     resolve,
+    subprocess_probe,
 )
 
 __all__ = [
@@ -46,7 +48,6 @@ __all__ = [
     "run_bgm",
 ]
 
-FFMPEG = media.FFMPEG
 MODES = ("auto", "separate", "center", "duck", "off")
 SEPARATED_AUDIO = "no_vocals.wav"  # demucs --two-stems=vocals 的伴奏轨文件名
 MEAN_VOLUME = re.compile(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB")
@@ -138,16 +139,13 @@ def demucs_candidates(*explicit: str | None) -> list[str]:
     )
 
 
+_DEMUCS_PROBE = subprocess_probe("demucs", timeout_s=60.0)
+
+
 def _can_import_demucs(python: str) -> bool:
-    if not Path(python).is_file():
-        return False
-    try:
-        completed = subprocess.run(
-            [python, "-c", "import demucs"], capture_output=True, timeout=60
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return completed.returncode == 0
+    """``[python, -c, "import demucs"]`` 探针（本体在 ``interpreters.subprocess_probe``）。"""
+
+    return _DEMUCS_PROBE(python)[0]
 
 
 def find_demucs_python(*candidates: str | None) -> str | None:
@@ -170,17 +168,41 @@ def find_demucs_python(*candidates: str | None) -> str | None:
 # ---------------------------------------------------------------------- 分离
 
 
-def _run(
+# bgm 这条链路既跑 ffmpeg 也跑 demucs，缺工具提示不能只说 ffmpeg
+_BGM_MISSING_HINT = "找不到 {tool}，请确认已安装 ffmpeg / demucs"
+
+
+def _run_demucs(
     command: list[str], *, what: str, timeout: float | None = None, env: dict[str, str] | None = None
 ) -> "subprocess.CompletedProcess[bytes]":
+    """跑 demucs（不是 ffmpeg，所以走 ``exec_tool`` 而不带全局参数前缀）。"""
+
     return media.exec_tool(
         command,
         error_cls=BgmError,
         what=what,
         timeout_s=timeout,
         env=env,
-        # bgm 这条链路既跑 ffmpeg 也跑 demucs，提示不能只说 ffmpeg
-        missing_hint="找不到 {tool}，请确认已安装 ffmpeg / demucs",
+        missing_hint=_BGM_MISSING_HINT,
+    )
+
+
+def _run_ffmpeg(
+    args: list[str],
+    *,
+    what: str,
+    check: bool = True,
+    global_flags: Sequence[str] = media.DEFAULT_FFMPEG_FLAGS,
+) -> "subprocess.CompletedProcess[bytes]":
+    """bgm 里的 ffmpeg 调用：错误类与缺工具提示固定在这里，调用点只给业务参数。"""
+
+    return media.run_ffmpeg(
+        args,
+        error_cls=BgmError,
+        what=what,
+        check=check,
+        global_flags=global_flags,
+        missing_hint=_BGM_MISSING_HINT,
     )
 
 
@@ -188,9 +210,9 @@ def _extract_audio(source: Path, out_wav: Path) -> Path:
     """取原片音轨为 44.1k 立体声（分离模型按立体声训练，先降到 24k 会伤质量）。"""
 
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    _run(
+    _run_ffmpeg(
         [
-            FFMPEG, "-v", "error", "-y", "-i", str(source),
+            "-i", str(source),
             "-vn", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", str(out_wav),
         ],
         what="提取原片音轨",
@@ -217,7 +239,7 @@ def _separate_with_demucs(
     home = torch_home()
     home.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "TORCH_HOME": str(home)}
-    _run(
+    _run_demucs(
         [
             *base,
             "--two-stems=vocals",
@@ -240,9 +262,9 @@ def _separate_center(audio: Path, out_wav: Path) -> Path:
     """相位抵消：立体声里居中的（人声）在 c0-c1 中抵消，两侧伴奏留下。"""
 
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    _run(
+    _run_ffmpeg(
         [
-            FFMPEG, "-v", "error", "-y", "-i", str(audio),
+            "-i", str(audio),
             "-af", "pan=stereo|c0=c0-c1|c1=c1-c0",
             "-c:a", "pcm_s16le", str(out_wav),
         ],
@@ -301,11 +323,11 @@ def mix_filter(options: BgmOptions) -> str:
 def _mean_volume_db(path: Path) -> float | None:
     """整轨平均电平（dB）：用来判断"分离出来的伴奏到底有没有东西"。"""
 
-    completed = media.exec_tool(
-        [media.FFMPEG, "-v", "info", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
-        error_cls=BgmError,
+    completed = _run_ffmpeg(
+        ["-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
         what="读取平均电平",
         check=False,  # volumedetect 把结果写 stderr，退出码不重要
+        global_flags=("-v", "info"),
     )
     match = MEAN_VOLUME.search(media.stderr_text(completed))
     return float(match.group(1)) if match else None
@@ -319,9 +341,8 @@ def mix_voice_and_bgm(voice: Path, bgm: Path, out_wav: Path, options: BgmOptions
     if not bgm.is_file():
         raise BgmError(f"伴奏音轨不存在：{bgm}")
     out_wav.parent.mkdir(parents=True, exist_ok=True)
-    _run(
+    _run_ffmpeg(
         [
-            FFMPEG, "-v", "error", "-y",
             "-i", str(voice),
             "-i", str(bgm),
             "-filter_complex", mix_filter(options),

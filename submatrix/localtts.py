@@ -34,8 +34,8 @@ from typing import Callable
 from .interpreters import (
     Requirement,
     bool_probe,
-    missing_message,
     resolve,
+    subprocess_probe,
 )
 from .worker_protocol import describe_error
 
@@ -182,19 +182,16 @@ def _candidate_local_tts_pythons(root: Path | None = None) -> list[str]:
     return candidates
 
 
-def _probe_sherpa_onnx(python: str) -> bool:
-    """``[python, -c, "import sherpa_onnx"]`` 探针；任何失败都当"不可用"。"""
+_SHERPA_ONNX_PROBE = subprocess_probe("sherpa_onnx", timeout_s=60.0)
 
-    try:
-        completed = subprocess.run(  # noqa: S603 - 固定 -c 探针，参数是本机路径
-            [python, "-c", "import sherpa_onnx"],
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return completed.returncode == 0
+
+def _probe_sherpa_onnx(python: str) -> bool:
+    """``[python, -c, "import sherpa_onnx"]`` 探针；任何失败都当"不可用"。
+
+    本体在 ``interpreters.subprocess_probe``（tts / localtts / bgm 共用一份）。
+    """
+
+    return _SHERPA_ONNX_PROBE(python)[0]
 
 
 def find_local_tts_python(
@@ -222,8 +219,8 @@ def find_local_tts_python(
         trust_env=True,
         error_cls=LocalTtsError,
     )
-    if found is None:  # on_missing=raise 时走不到，防御性兜底
-        raise LocalTtsError(missing_message(_LOCAL_TTS_PYTHON, ()))
+    if found is None:  # 契约上走不到：on_missing=raise 要么返回解释器、要么已抛错
+        raise LocalTtsError("内部错误：解释器探测既没返回结果也没报错")
     return found
 
 

@@ -28,7 +28,6 @@ from typing import Callable, Sequence
 from . import __version__
 from .interpreters import (
     Requirement,
-    missing_message,
     ordered_candidates,
     python_in_venv,
     resolve,
@@ -147,8 +146,8 @@ def find_python(explicit: str | None, *, runner: Runner | None = None) -> str:
         probe=runner_probe(run, _ASR_PYTHON.module),
         error_cls=AsrError,
     )
-    if found is None:  # on_missing=raise 时走不到，防御性兜底
-        raise AsrError(missing_message(_ASR_PYTHON, ()))
+    if found is None:  # 契约上走不到：on_missing=raise 要么返回解释器、要么已抛错
+        raise AsrError("内部错误：解释器探测既没返回结果也没报错")
     return found
 
 
