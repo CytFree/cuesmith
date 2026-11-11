@@ -94,6 +94,16 @@ def normalize_cjk_spacing(text: str) -> str:
     cleaned = _SPACE_BEFORE_CJK_PUNCT.sub("", cleaned)
     return " ".join(cleaned.split())
 
+
+def _normalize_texts(texts: Sequence[str | None]) -> list[str | None]:
+    """整批清一遍中文间距；空串/None 原样保留（没译出来的条目不能变成空串）。
+
+    初译后、审校后、精简后各需要一次。以前是三处一模一样的推导式：``if text else text``
+    这一层是防 None 的，抄漏一次就会在中文链路上炸 ``TypeError``。
+    """
+
+    return [normalize_cjk_spacing(text) if text else text for text in texts]
+
 Transport = Callable[[str, bytes, dict[str, str], float], object]
 
 
@@ -1272,7 +1282,7 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         raise TranslateError("内部错误：有 cue 没拿到译文")
 
     if tgt_profile.cjk:
-        texts = [normalize_cjk_spacing(text) if text else text for text in texts]
+        texts = _normalize_texts(texts)
 
     # 第二遍审校（可选）：只让模型改明显错误；多轮时上一轮成品进下一轮，用来拦漏网误译
     review_failed = 0
@@ -1313,7 +1323,7 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
             if pass_changed == 0:
                 break  # 收敛：上一轮一条都没改，没必要再花 token
         if tgt_profile.cjk:
-            texts = [normalize_cjk_spacing(text) if text else text for text in texts]
+            texts = _normalize_texts(texts)
 
     # 译后精简：默认开启，只碰超过目标 CPS 的条目（--no-condense 关闭）
     # 术语译法是硬约束：精简时不许把它当措辞删掉（宁可超 CPS）
@@ -1337,7 +1347,7 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         )
     final_texts = [result.text for result in condense_results]
     if tgt_profile.cjk:
-        final_texts = [normalize_cjk_spacing(text) if text else text for text in final_texts]
+        final_texts = _normalize_texts(final_texts)
     else:
         # 英文目标：ASR 源文常缺句号，补上（源文以逗号收尾=话没说完，不补）
         final_texts = [

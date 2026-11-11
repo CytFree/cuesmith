@@ -119,6 +119,15 @@ class PipelineError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class PipelineOptions:
+    """一次 pipeline 的全部参数（CLI 与 GUI 共用）。
+
+    **新增一个参数要动的地方**（漏一处就是"参数写了但没生效"，历史上踩过）：
+    ① ``cli._add_*_args`` 的参数表；② 这里的字段（同名即可，``_pipeline_options`` 用
+    ``**vars(args)`` 透传，不用再手抄一行）；③ ``_report_config``（``pipeline.json``
+    的审计字段）；④ 若该参数属于某阶段，还要转到对应 ``XOptions``（如 dub 的 30 个）；
+    ⑤ GUI 表单（``gui.py``，可选）。
+    """
+
     src: Path
     out: Path
     src_lang: str = "auto"  # auto = 用 ASR 识别结果（内封字幕路线要求显式）
@@ -1203,25 +1212,12 @@ def _stage_diarize(run: _Run, track: _Track) -> bool:
                 )
             else:
                 diarization = run_diarize(
-                    DiarizeOptions(
-                        src=run.source,
-                        out=diarize_dir,
+                    _diarize_options(
+                        options,
+                        source=run.source,
+                        out_dir=diarize_dir,
                         srt=track.working_srt,
                         language=track.src_lang,
-                        python=options.diarize_python,
-                        segmentation_model=options.segmentation_model,
-                        embedding_model=options.embedding_model,
-                        vad=options.vad,
-                        vad_model=options.vad_model,
-                        vad_threshold=options.vad_threshold,
-                        clustering=options.clustering,
-                        merge_alpha=options.merge_alpha,
-                        num_speakers=options.speakers,
-                        threshold=options.diarization_threshold,
-                        min_speaker_speech_s=0.0
-                        if options.keep_minor_speakers
-                        else MIN_SPEAKER_SPEECH_S,
-                        min_speaker_share=0.0 if options.keep_minor_speakers else 0.01,
                     )
                 )
                 track.speakers_path = diarization.speakers_path
@@ -1801,6 +1797,42 @@ def _segments_base_report(payload: dict[str, object]) -> dict[str, object]:
     return base
 
 
+def _diarize_options(
+    options: PipelineOptions,
+    *,
+    source: Path,
+    out_dir: Path,
+    srt: Path | None,
+    language: str,
+) -> DiarizeOptions:
+    """一次 diarize 的完整参数：正式分离与后台预取**只差 ``srt``**。
+
+    16 个字段里 12 个直接来自 ``PipelineOptions``；两处各写一遍时，新增一个
+    ``--vad-*`` 之类的开关很容易只改到一处，于是"预取跑出来的分段"和"正式分离跑出来的
+    分段"参数不同，两边产物对不上还很难看出来。
+    """
+
+    return DiarizeOptions(
+        src=source,
+        out=out_dir,
+        srt=srt,
+        language=language,
+        python=options.diarize_python,
+        segmentation_model=options.segmentation_model,
+        embedding_model=options.embedding_model,
+        vad=options.vad,
+        vad_model=options.vad_model,
+        vad_threshold=options.vad_threshold,
+        clustering=options.clustering,
+        merge_alpha=options.merge_alpha,
+        num_speakers=options.speakers,
+        threshold=options.diarization_threshold,
+        # 短簇合并开关：关掉时把两道门槛都归零，聚类后不再丢弃小簇
+        min_speaker_speech_s=0.0 if options.keep_minor_speakers else MIN_SPEAKER_SPEECH_S,
+        min_speaker_share=0.0 if options.keep_minor_speakers else 0.01,
+    )
+
+
 def _start_diarize_segments(
     options: PipelineOptions, source: Path, diarize_dir: Path, language: str
 ) -> tuple[list[SpeakerTurn], dict[str, object]] | _BackgroundJob:
@@ -1811,24 +1843,10 @@ def _start_diarize_segments(
         return turns, _segments_base_report(payload)
 
     def run() -> object:
+        # 只跑分段（srt=None）；字幕归属等 ASR 出来再补
         return run_diarize(
-            DiarizeOptions(
-                src=source,
-                out=diarize_dir,
-                srt=None,  # 只跑分段；字幕归属等 ASR 出来再补
-                language=language,
-                python=options.diarize_python,
-                segmentation_model=options.segmentation_model,
-                embedding_model=options.embedding_model,
-                vad=options.vad,
-                vad_model=options.vad_model,
-                vad_threshold=options.vad_threshold,
-                clustering=options.clustering,
-                merge_alpha=options.merge_alpha,
-                num_speakers=options.speakers,
-                threshold=options.diarization_threshold,
-                min_speaker_speech_s=0.0 if options.keep_minor_speakers else MIN_SPEAKER_SPEECH_S,
-                min_speaker_share=0.0 if options.keep_minor_speakers else 0.01,
+            _diarize_options(
+                options, source=source, out_dir=diarize_dir, srt=None, language=language
             )
         )
 

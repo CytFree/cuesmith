@@ -393,6 +393,106 @@ def _add_diarize_args(subparsers: argparse._SubParsersAction) -> None:
     diarize.add_argument("--threads", type=int, default=0, help="推理线程数（0 = 1）")
 
 
+def _add_dubbing_args(
+    parser: argparse.ArgumentParser, *, concurrency_default: int
+) -> None:
+    """``dub`` 与 ``pipeline`` 共用的配音参数（19 个 flag）。
+
+    两个子命令对这批参数的解释完全相同，只差并发默认值（``dub`` 单阶段默认 6、
+    ``pipeline`` 全链路默认 10）——所以它是参数，不是两份代码。以前各抄一份，
+    help 文案已经漂了 15 处（``--tempo-limit`` 一边写"（默认 1.4）"、一边什么都不写）。
+
+    **语义确实不同**的四个留在各自块里：``--out``（目录 vs 输出根目录）、
+    ``--tgt-lang``（只挑本地音色 vs 真正的翻译目标）、``--voice`` / ``--tts-rate``
+    （dub 是"原速/该音色"，pipeline 是"按目标语言给默认值"）。
+    """
+
+    parser.add_argument(
+        "--speaker-voices",
+        default=None,
+        help="多人声色：SPEAKER_00=音色,SPEAKER_01=音色 或 音色池（音色1,音色2，按出场顺序分配）",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=concurrency_default,
+        help=f"配音并发数（默认 {concurrency_default}）",
+    )
+    parser.add_argument(
+        "--tempo-limit", type=float, default=1.4, help="atempo 压缩上限（默认 1.4）"
+    )
+    parser.add_argument(
+        "--adaptive-rate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="放不下的条目提语速重合成（默认开；--no-adaptive-rate 关掉、只靠 atempo）",
+    )
+    parser.add_argument(
+        "--tts-python",
+        default=None,
+        help="装有 edge-tts 的 Python 解释器（默认自动探测：当前解释器 → spike/.venv311 → pyvideotrans venv）",
+    )
+    parser.add_argument(
+        "--tts-command",
+        default=None,
+        help="外部 TTS 命令模板（{text_file} / {out} / {voice_id}；阿里云示例见 tools/tts_dashscope.py）",
+    )
+    parser.add_argument(
+        "--tts-provider",
+        choices=["edge", "local"],
+        default="edge",
+        help="TTS 主渠道：edge=免费在线 Edge-TTS（默认）；local=本地 sherpa-onnx（离线，需模型）",
+    )
+    parser.add_argument(
+        "--tts-fallback",
+        choices=["local", "off"],
+        default="local",
+        help="Edge 失败时是否用本地 TTS 兜底（默认 local；off=只重试）",
+    )
+    parser.add_argument(
+        "--local-tts-model", default=None, help="本地 TTS 模型目录（默认自动找 spike/local-tts/*）"
+    )
+    parser.add_argument(
+        "--local-tts-kind", choices=["auto", "kokoro", "vits"], default="auto", help="本地 TTS 类型"
+    )
+    parser.add_argument(
+        "--local-tts-voice",
+        default="",
+        help="本地音色：kokoro 用 47/kokoro:47/名字，vits 用 0；空=按目标语言默认（zh→47/en→3）",
+    )
+    parser.add_argument("--local-tts-python", default=None, help="装有 sherpa-onnx 的 Python")
+    parser.add_argument("--local-tts-threads", type=int, default=8, help="本地 TTS 推理线程（默认 8）")
+    parser.add_argument(
+        "--local-tts-speed",
+        type=float,
+        default=None,
+        help="本地 TTS 基础倍速（默认 1.0，再叠加 --tts-rate；0.5–2.0）",
+    )
+    parser.add_argument(
+        "--regenerate-tts",
+        action="store_true",
+        help="忽略内容指纹缓存、强制重新合成（云端 TTS 会重新计费；默认复用已合成的音频）",
+    )
+    parser.add_argument(
+        "--keep-bgm",
+        action="store_true",
+        help="保留原片背景音乐：拆人声 → 伴奏随配音自动让路 → 混进成片（收费软件同款）",
+    )
+    parser.add_argument(
+        "--bgm-mode",
+        default="auto",
+        choices=["auto", "separate", "center", "duck"],
+        help="BGM 策略：auto 有 demucs 用 demucs 否则相位抵消 / separate 必须 demucs / "
+        "center 相位抵消 / duck 原声压低当背景",
+    )
+    parser.add_argument(
+        "--bgm-source", type=Path, default=None, help="取哪条音轨做伴奏（默认 --video 的音轨）"
+    )
+    parser.add_argument(
+        "--separator-python", default=None, help="装有 demucs 的 Python（默认找 spike/demucs 环境）"
+    )
+
+
 def _add_dub_args(subparsers: argparse._SubParsersAction) -> None:
     """``dub``：配音编排（并发合成 + 重试 + 时长校验 + 溢出吸收 + 可选 BGM）。"""
 
@@ -405,6 +505,7 @@ def _add_dub_args(subparsers: argparse._SubParsersAction) -> None:
             "产出 dubbed.wav / 可选 dubbed.mp4 与 dub_report.json。"
         ),
     )
+
     dub.add_argument("--srt", required=True, type=Path, help="译文字幕（时间轴即配音槽位）")
     dub.add_argument("--out", required=True, type=Path, help="输出目录")
     dub.add_argument("--video", type=Path, default=None, help="可选：把配音并进这个视频")
@@ -416,96 +517,18 @@ def _add_dub_args(subparsers: argparse._SubParsersAction) -> None:
         help="说话人归属文件（diarize 的 speakers.json）：按说话人分派多音色",
     )
     dub.add_argument(
-        "--speaker-voices",
-        default=None,
-        help="多人声色：SPEAKER_00=音色,SPEAKER_01=音色 或 音色池（音色1,音色2，按出场顺序分配）",
-    )
-    dub.add_argument(
         "--tts-rate", default=None, help="TTS 语速，如 +30%%（Edge-TTS 语法，默认原速）"
     )
-    dub.add_argument("--concurrency", type=int, default=6, help="并发数（默认 6）")
     dub.add_argument("--retries", type=int, default=2, help="单条失败重试次数（默认 2）")
-    dub.add_argument(
-        "--tempo-limit", type=float, default=1.4, help="atempo 压缩上限（默认 1.4）"
-    )
-    dub.add_argument(
-        "--adaptive-rate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="放不下的条目提语速重合成（默认开；--no-adaptive-rate 关掉、只靠 atempo）",
-    )
-    dub.add_argument(
-        "--tts-command",
-        default=None,
-        help="外部 TTS 命令模板（{text_file} / {out} / {voice_id}；阿里云示例见 tools/tts_dashscope.py）",
-    )
-    dub.add_argument(
-        "--tts-provider",
-        choices=["edge", "local"],
-        default="edge",
-        help="TTS 主渠道：edge=免费在线 Edge-TTS（默认）；local=本地 sherpa-onnx（离线，需模型）",
-    )
-    dub.add_argument(
-        "--tts-fallback",
-        choices=["local", "off"],
-        default="local",
-        help="Edge 失败时是否用本地 TTS 兜底（默认 local；off=只重试）",
-    )
-    dub.add_argument(
-        "--local-tts-model", default=None, help="本地 TTS 模型目录（默认自动找 spike/local-tts/*）"
-    )
-    dub.add_argument(
-        "--local-tts-kind", choices=["auto", "kokoro", "vits"], default="auto", help="本地 TTS 类型"
-    )
-    dub.add_argument(
-        "--local-tts-voice",
-        default="",
-        help="本地音色：kokoro 用 47/kokoro:47/名字，vits 用 0；空=按目标语言默认（zh→47/en→3）",
-    )
-    dub.add_argument("--local-tts-python", default=None, help="装有 sherpa-onnx 的 Python")
-    dub.add_argument("--local-tts-threads", type=int, default=8, help="本地 TTS 推理线程（默认 8）")
-    dub.add_argument(
-        "--local-tts-speed",
-        type=float,
-        default=None,
-        help="本地 TTS 基础倍速（默认 1.0，再叠加 --tts-rate；0.5–2.0）",
-    )
     dub.add_argument(
         "--tgt-lang",
         choices=["zh", "en"],
         default="zh",
         help="目标语言（只用于挑本地 TTS 默认音色；默认 zh）",
     )
-    dub.add_argument(
-        "--tts-python",
-        default=None,
-        help="装有 edge-tts 的 Python 解释器（默认自动探测：当前解释器 → spike/.venv311 → pyvideotrans venv）",
-    )
-    dub.add_argument(
-        "--regenerate-tts",
-        action="store_true",
-        help="忽略内容指纹缓存、强制重新合成（云端 TTS 会重新计费；默认复用已合成的音频）",
-    )
-    dub.add_argument(
-        "--keep-bgm",
-        action="store_true",
-        help="保留原片背景音乐：拆人声 → 伴奏随配音自动让路 → 混进成片（收费软件同款）",
-    )
-    dub.add_argument(
-        "--bgm-mode",
-        default="auto",
-        choices=["auto", "separate", "center", "duck"],
-        help="BGM 策略：auto 有 demucs 用 demucs 否则相位抵消 / separate 必须 demucs / "
-        "center 相位抵消 / duck 原声压低当背景",
-    )
     dub.add_argument("--bgm-gain", type=float, default=-2.0, help="伴奏增益 dB（默认 -2）")
     dub.add_argument("--bgm-duck", type=float, default=-12.0, help="配音时伴奏压低 dB（默认 -12）")
-    dub.add_argument(
-        "--bgm-source", type=Path, default=None, help="取哪条音轨做伴奏（默认 --video 的音轨）"
-    )
-    dub.add_argument(
-        "--separator-python", default=None, help="装有 demucs 的 Python（默认找 spike/demucs 环境）"
-    )
+    _add_dubbing_args(dub, concurrency_default=6)
 
 
 def _add_burn_args(subparsers: argparse._SubParsersAction) -> None:
@@ -554,6 +577,7 @@ def _add_pipeline_args(subparsers: argparse._SubParsersAction) -> None:
             "每阶段产物落盘，默认复用已完成阶段（--force 强制重跑）；--stop-after 可只跑到某一阶段。"
         ),
     )
+
     pipeline.add_argument("--src", required=True, type=Path, help="输入视频（mp4/mkv/webm/...）")
     pipeline.add_argument("--out", required=True, type=Path, help="输出根目录（各阶段子目录）")
     pipeline.add_argument(
@@ -655,72 +679,14 @@ def _add_pipeline_args(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="二次聚类阈值系数（默认按输入模式：原始音频 0.55 / VAD 拼接音频 0.70）",
     )
-    pipeline.add_argument(
-        "--speaker-voices",
-        default=None,
-        help="多人声色：SPEAKER_00=音色,SPEAKER_01=音色 或 音色池（音色1,音色2）",
-    )
     pipeline.add_argument("--voice", default=None, help="TTS 音色（默认按目标语言）")
     pipeline.add_argument("--tts-rate", default=None, help="TTS 语速（默认按目标语言）")
-    pipeline.add_argument(
-        "--tts-python",
-        default=None,
-        help="装有 edge-tts 的 Python（默认自动探测：当前解释器 → spike/.venv311 → pyvideotrans venv）",
-    )
-    pipeline.add_argument(
-        "--tts-command",
-        default=None,
-        help="外部 TTS 命令模板（{text_file} / {out} / {voice_id}；阿里云示例见 tools/tts_dashscope.py）",
-    )
-    pipeline.add_argument(
-        "--tts-provider",
-        choices=["edge", "local"],
-        default="edge",
-        help="TTS 主渠道：edge=免费在线 Edge-TTS（默认）；local=本地 sherpa-onnx（离线，需模型）",
-    )
-    pipeline.add_argument(
-        "--tts-fallback",
-        choices=["local", "off"],
-        default="local",
-        help="Edge 失败时是否用本地 TTS 兜底（默认 local；off=只重试）",
-    )
-    pipeline.add_argument("--local-tts-model", default=None, help="本地 TTS 模型目录（默认自动找）")
-    pipeline.add_argument(
-        "--local-tts-kind", choices=["auto", "kokoro", "vits"], default="auto", help="本地 TTS 类型"
-    )
-    pipeline.add_argument(
-        "--local-tts-voice", default="", help="本地音色（kokoro 47/kokoro:47/名字；vits 0；空=按目标语言）"
-    )
-    pipeline.add_argument("--local-tts-python", default=None, help="装有 sherpa-onnx 的 Python")
-    pipeline.add_argument("--local-tts-threads", type=int, default=8, help="本地 TTS 推理线程（默认 8）")
-    pipeline.add_argument(
-        "--local-tts-speed", type=float, default=None, help="本地 TTS 基础倍速（0.5–2.0，默认 1.0）"
-    )
-    pipeline.add_argument(
-        "--regenerate-tts",
-        action="store_true",
-        help="忽略内容指纹缓存、强制重新合成（云端 TTS 会重新计费；默认复用已合成的音频）",
-    )
-    pipeline.add_argument("--concurrency", type=int, default=10, help="配音并发数（默认 10）")
     pipeline.add_argument(
         "--translate-concurrency",
         type=int,
         default=4,
         help="翻译分块并发（默认 4；免费 MT 别开太大，会被限流）",
     )
-    pipeline.add_argument("--tempo-limit", type=float, default=1.4, help="atempo 压缩上限")
-    pipeline.add_argument(
-        "--adaptive-rate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="放不下的条目提语速重合成（默认开；--no-adaptive-rate 关掉、只靠 atempo）",
-    )
-    pipeline.add_argument("--keep-bgm", action="store_true", help="保留原片背景音乐")
-    pipeline.add_argument(
-        "--bgm-mode", default="auto", choices=["auto", "separate", "center", "duck"]
-    )
-    pipeline.add_argument("--bgm-source", type=Path, default=None)
-    pipeline.add_argument("--separator-python", default=None)
     pipeline.add_argument(
         "--burn-subtitles",
         action=argparse.BooleanOptionalAction,
@@ -756,6 +722,9 @@ def _add_pipeline_args(subparsers: argparse._SubParsersAction) -> None:
         default=None,
         help="成本价表 JSON（覆盖内置示例价；深合并）",
     )
+    _add_dubbing_args(pipeline, concurrency_default=10)
+
+
 
 
 def _add_cost_args(subparsers: argparse._SubParsersAction) -> None:
@@ -1347,7 +1316,24 @@ def _print_burn_summary(result: BurnResult) -> None:
         print(f"[warn] {warning}", file=sys.stderr)
 
 
-def _run_pipeline(args: argparse.Namespace) -> int:
+_CLI_ONLY_ARGS = frozenset({"command", "glossary_reverse", "hotwords_file"})
+_EXPANDED_ARGS = frozenset({"glossary", "hotwords", "pricing"})
+
+
+def _pipeline_options(args: argparse.Namespace) -> PipelineOptions:
+    """``argparse.Namespace`` → ``PipelineOptions``：同名参数直接透传。
+
+    以前这里把 60 个参数一个个 ``src=args.src, out=args.out, …`` 抄一遍，于是"加一个
+    pipeline 参数"要同时动 5 处（CLI 参数表、Options 字段、这张手抄表、pipeline.json
+    的 config 段、阶段 Options 的转发），漏一处就是"参数写了但没生效"。
+    现在只有三种需要显式处理：
+
+    - ``glossary``：路径 → 术语表对象（``--glossary-reverse`` 在这里生效）；
+    - ``hotwords``：逗号串 + ``--hotwords-file`` → 合并后的 tuple（去重由 asr 阶段做）；
+    - ``pricing``：Path → str（报告要能 JSON 化）；
+    - ``llm_review`` / ``llm_config``：CLI 没有独立开关，由 ``--llm`` 与环境变量决定。
+    """
+
     glossary = Glossary.from_file(args.glossary) if args.glossary is not None else None
     if glossary is not None and args.glossary_reverse:
         glossary = glossary.reversed()
@@ -1355,71 +1341,24 @@ def _run_pipeline(args: argparse.Namespace) -> int:
     if args.hotwords_file is not None:
         hotwords.extend(Glossary.from_file(args.hotwords_file).sources)
     llm = LlmConfig.from_env()
-    result = run_pipeline(
-        PipelineOptions(
-            src=args.src,
-            out=args.out,
-            src_lang=args.src_lang,
-            tgt_lang=args.tgt_lang,
-            provider=args.provider,
-            llm=args.llm,
-            llm_review=True,
-            glossary=glossary,
-            condense=args.condense,
-            condense_mode=args.condense_mode,
-            translate_fallback=args.translate_fallback,
-            asr_python=args.asr_python,
-            asr_model=args.asr_model,
-            hotwords=tuple(hotwords),
-            initial_prompt=args.initial_prompt,
-            merge=args.merge,
-            merge_max_duration=args.merge_max_duration,
-            merge_max_gap=args.merge_max_gap,
-            diarize=args.diarize,
-            speakers=args.speakers,
-            diarization_threshold=args.diarization_threshold,
-            keep_minor_speakers=args.keep_minor_speakers,
-            diarize_python=args.diarize_python,
-            segmentation_model=args.segmentation_model,
-            embedding_model=args.embedding_model,
-            vad=args.vad,
-            vad_model=args.vad_model,
-            vad_threshold=args.vad_threshold,
-            clustering=args.clustering,
-            merge_alpha=args.merge_alpha,
-            speaker_voices=args.speaker_voices,
-            voice=args.voice,
-            tts_rate=args.tts_rate,
-            tts_python=args.tts_python,
-            tts_command=args.tts_command,
-            tts_provider=args.tts_provider,
-            tts_fallback=args.tts_fallback,
-            local_tts_model=args.local_tts_model,
-            local_tts_kind=args.local_tts_kind,
-            local_tts_voice=args.local_tts_voice,
-            local_tts_python=args.local_tts_python,
-            local_tts_threads=args.local_tts_threads,
-            local_tts_speed=args.local_tts_speed,
-            regenerate_tts=args.regenerate_tts,
-            concurrency=args.concurrency,
-            translate_concurrency=args.translate_concurrency,
-            tempo_limit=args.tempo_limit,
-            adaptive_rate=args.adaptive_rate,
-            keep_bgm=args.keep_bgm,
-            bgm_mode=args.bgm_mode,
-            bgm_source=args.bgm_source,
-            separator_python=args.separator_python,
-            burn_subtitles=args.burn_subtitles,
-            burn_mode=args.burn_mode,
-            burn_crf=args.burn_crf,
-            burn_position=args.burn_position,
-            mark=args.mark,
-            force=args.force,
-            stop_after=args.stop_after,
-            pricing=str(args.pricing) if args.pricing is not None else None,
-            llm_config=llm if llm.configured else None,
-        )
+    carried = {
+        name: value
+        for name, value in vars(args).items()
+        if name not in _CLI_ONLY_ARGS | _EXPANDED_ARGS
+    }
+    carried.update(
+        glossary=glossary,
+        hotwords=tuple(hotwords),
+        pricing=str(args.pricing) if args.pricing is not None else None,
+        llm_config=llm if llm.configured else None,
     )
+    # CLI 目前没有 --llm-review 开关（--llm 默认双轮审校）；将来真加了就让 args 优先
+    carried.setdefault("llm_review", True)
+    return PipelineOptions(**carried)
+
+
+def _run_pipeline(args: argparse.Namespace) -> int:
+    result = run_pipeline(_pipeline_options(args))
     _print_pipeline_summary(result)
     return result.exit_code
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import subprocess
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from submatrix import cli as cli_module
 from submatrix import media as media_module
 from submatrix import pipeline as pipeline_module
 from submatrix.asr import model_variant, preferred_model
@@ -1513,6 +1515,53 @@ def test_cli_pipeline_can_disable_merge() -> None:
         parser.parse_args(["pipeline", "--src", "a.mp4", "--out", "out", "--no-merge"]).merge
         is False
     )
+
+
+def test_every_pipeline_flag_lands_on_pipeline_options() -> None:
+    """CLI 新加一个 pipeline 参数，必须能在 ``PipelineOptions`` 上找到落点。
+
+    ``_pipeline_options()`` 用 ``**vars(args)`` 透传，所以"参数加了但没生效"现在只剩
+    一种可能：CLI 有、Options 没有。下面三个是 CLI 专属（在 ``_pipeline_options`` 里被
+    展开成别的字段），其余每个 flag 都必须同名落到 dataclass 上。
+    """
+
+    args = build_parser().parse_args(["pipeline", "--src", "a.mp4", "--out", "out"])
+    cli_only = {"command", "glossary_reverse", "hotwords_file"}
+    fields = {field.name for field in dataclasses.fields(PipelineOptions)}
+
+    orphans = sorted(set(vars(args)) - cli_only - fields)
+    assert not orphans, f"这些 CLI 参数没有落到 PipelineOptions：{orphans}"
+
+
+def test_pipeline_options_expands_cli_transforms(tmp_path) -> None:
+    """``_pipeline_options`` 的三处展开：术语表、热词、价表路径。"""
+
+    glossary = tmp_path / "g.txt"
+    glossary.write_text("Blender\n", encoding="utf-8")
+    hotwords = tmp_path / "h.txt"
+    hotwords.write_text("曹操\n", encoding="utf-8")
+    args = build_parser().parse_args(
+        [
+            "pipeline", "--src", "a.mp4", "--out", "out",
+            "--glossary", str(glossary), "--glossary-reverse",
+            "--hotwords", " 刘备 , 曹操 ,,",
+            "--hotwords-file", str(hotwords),
+            "--pricing", "price.json",
+        ]
+    )
+
+    options = cli_module._pipeline_options(args)
+
+    # 术语表：路径 → 对象；--glossary-reverse 把"英文原词→中文"翻成"中文→英文"
+    assert options.glossary is not None
+    assert [term.source for term in options.glossary] == ["Blender"]
+    # 热词：逗号串 + 文件按顺序合并（去重发生在 asr 阶段，这里保持原样）
+    assert options.hotwords == ("刘备", "曹操", "曹操")
+    # 价表：Path → str（报告要能 JSON 化）
+    assert options.pricing == "price.json"
+    assert isinstance(options.pricing, str)
+    # CLI 没有 --llm-review 开关：--llm 默认双轮审校
+    assert options.llm_review is True
 
 
 def test_cli_burn_command(tmp_path) -> None:
