@@ -445,6 +445,8 @@ def test_escalation_failure_keeps_base_audio_and_warns(tmp_path, monkeypatch) ->
     assert report["status"] == "ok"
     assert report["summary"]["failed"] == 0
     assert entry["rate_escalated"] is False
+    # 报告里的语速必须是**实际用上的**那档：提语速失败后回滚到基准语速
+    assert entry["rate"] == "+30%"
     assert entry["action"] == "manual"
     assert any("提语速" in warning for warning in report["warnings"])
 
@@ -524,6 +526,31 @@ def test_synthesis_runs_concurrently(tmp_path) -> None:
 # ---------------------------------------------------------------- 音频铺轨
 
 
+def test_unreadable_synthesized_audio_fails_only_that_cue(tmp_path) -> None:
+    """合成出来的文件读不出时长：只算这一条失败，不阻塞其它条目（AC-9）。
+
+    真实场景：引擎"成功返回"但写出的其实不是音频（0 字节/半个文件/被截断）。
+    这时不能当成功（后面解码会炸），也不能拖垮整片。
+    """
+
+    class CorruptEngine(FakeEngine):
+        def synthesize(self, text: str, out_path: Path) -> None:
+            if text == "Second line here":
+                out_path.write_bytes(b"not really audio")
+                return
+            super().synthesize(text, out_path)
+
+    srt = write_srt(tmp_path / "en.srt", SRT_3)
+    result = dub(srt, tmp_path / "out", CorruptEngine())
+
+    report = report_of(result)
+    assert result.status == "partial"
+    assert [entry["cue"] for entry in report["failures"]] == [2]
+    assert "读时长" in str(report["failures"][0]["error"])
+    # 其它两条照常出声
+    assert [entry["cue"] for entry in report["cues"] if entry["audio_ms"] > 0] == [1, 3]
+
+
 def test_audio_is_placed_at_slot_start(tmp_path) -> None:
     srt = write_srt(tmp_path / "en.srt", SRT_WITH_GAP)
     result = dub(srt, tmp_path / "out", FakeEngine(default_ms=800, tone=True))
@@ -597,6 +624,12 @@ def test_video_longer_than_subtitles_is_not_truncated(tmp_path) -> None:
         )["format"]["duration"]
     )
     assert duration == pytest.approx(6.0, abs=0.5)
+
+    # 报告里的 total_audio_ms 必须是**音轨实际长度**（含补到视频长度那一段）：
+    # 真实素材踩过——报告写 146.5s、dubbed.wav 实际 154.1s，复盘时被误判成"音轨短了"
+    video_ms = dub_module._media_duration_ms(video)
+    assert report_of(result)["summary"]["total_audio_ms"] == video_ms
+    assert wav_duration_ms(result.audio_path) >= video_ms
 
 
 def test_tts_audio_is_reused_across_runs(tmp_path) -> None:

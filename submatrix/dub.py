@@ -447,12 +447,43 @@ def _choose_escalated_rate(
 
 
 @dataclass(slots=True)
+class _CueState:
+    """一条 cue 的配音状态：合成 → 量时长 → 提语速 全过程就地更新。
+
+    以前这是 :class:`_Session` 上 7 张以序号为键的平行 map（outcomes / cache_hits /
+    final_paths / rates / audio_ms / escalated / fallback_set）：想加一条状态就要在 8 个
+    函数里同步维护，漏掉一列的表现是"报告里某条对不上音频"这类很难查的错位。
+    现在一条 cue 一个对象，字段缺了是 AttributeError，不再是静默的默认值。
+    """
+
+    rate: str | None = None
+    attempts: int = 0
+    error: str | None = None
+    # 最终使用的音频（Edge 或本地兜底都记这里；后续量时长/解码都用它）
+    path: Path | None = None
+    audio_ms: int | None = None
+    # 提语速后实际用的档位（None = 没提过）；fallback = 走了本地 TTS 兜底
+    escalated: str | None = None
+    fallback: bool = False
+    # 内容指纹是否命中，按语速分别记（提语速后那条是重新合成的，不能算复用）
+    cache_hits: dict[str | None, bool] = field(default_factory=dict)
+
+    def snapshot(self) -> tuple[int, str | None, str | None]:
+        """提语速之前的"结论 + 语速"：提语速失败时整组回滚，报告才和音频对得上。"""
+
+        return self.attempts, self.error, self.rate
+
+    def restore(self, snapshot: tuple[int, str | None, str | None]) -> None:
+        self.attempts, self.error, self.rate = snapshot
+
+
+@dataclass(slots=True)
 class _Session:
     """一次配音的现场：字幕、音色分配、引擎缓存，以及每条 cue 的合成状态。
 
     这些状态原来是 ``run_dub`` 的局部变量，由 6 个嵌套函数通过闭包读写：``cue_voices``
-    会被"音色降级"和"本地兜底"就地改写，``outcomes``/``final_paths``/``audio_ms`` 由
-    "合成 → 量时长 → 提语速"三段分别维护。读那段代码时必须在脑子里同时维护十几个变量。
+    会被"音色降级"和"本地兜底"就地改写，每条 cue 的进度由"合成 → 量时长 → 提语速"
+    三段分别维护。读那段代码时必须在脑子里同时维护十几个变量。
     有名字、有归属之后，一段逻辑就是一个函数，也能单独测。
     """
 
@@ -471,16 +502,8 @@ class _Session:
     warnings: list[str]
     # 本地 TTS（OPT-11）：模型/类型只解析一次（探测 python 要起子进程）
     local_info: tuple[Path, str] | None = None
-    # 每条 cue 的合成状态，键都是 cue 序号（1 起）
-    outcomes: dict[int, tuple[int, str | None]] = field(default_factory=dict)
-    # (cue, 语速) → 是否命中内容指纹缓存（提语速后那条是重新合成的，不能算复用）
-    cache_hits: dict[tuple[int, str | None], bool] = field(default_factory=dict)
-    # 每条最终使用的音频路径（Edge 或本地兜底都记这里；后续量时长/解码都用它）
-    final_paths: dict[int, Path] = field(default_factory=dict)
-    rates: dict[int, str | None] = field(default_factory=dict)
-    audio_ms: dict[int, int] = field(default_factory=dict)
-    escalated: dict[int, str] = field(default_factory=dict)
-    fallback_set: set[int] = field(default_factory=set)
+    # 每条 cue 的配音状态（键是 cue 序号，1 起；_prepare 里按字幕条数初始化）
+    cues: dict[int, _CueState] = field(default_factory=dict)
     downgrades: list[dict[str, object]] = field(default_factory=list)
     fallback_events: list[dict[str, object]] = field(default_factory=list)
     # 逐条结论（写进报告的 cues 段）与铺轨用的 PCM 片段
@@ -495,6 +518,9 @@ class _Session:
 
     def cue(self, index: int) -> Cue:
         return self.cue_list[index - 1]
+
+    def state(self, index: int) -> _CueState:
+        return self.cues[index]
 
     def text(self, index: int) -> str:
         return self.cue_list[index - 1].text
@@ -535,12 +561,15 @@ class _Session:
 
     def synth(self, index: int, rate: str | None) -> tuple[int, str | None]:
         options = self.options
+        state = self.state(index)
+        state.rate = rate
         path = self.audio_path(index, rate)
         if options.reuse_tts and path.is_file() and path.stat().st_size > 0:
-            self.cache_hits[(index, rate)] = True
-            self.final_paths[index] = path
+            state.cache_hits[rate] = True
+            state.path = path
+            state.attempts, state.error = 0, None
             return 0, None
-        self.cache_hits[(index, rate)] = False
+        state.cache_hits[rate] = False
         try:
             attempts = _synth_with_retries(
                 self.engine_for(self.cue_voices[index - 1], rate),
@@ -549,30 +578,36 @@ class _Session:
                 retries=options.retries,
                 retry_delay_s=options.retry_delay_s,
             )
-            self.final_paths[index] = path
+            state.path = path
+            state.attempts, state.error = attempts, None
             return attempts, None
         except Exception as exc:  # noqa: BLE001 - 引擎异常类型不可控，按单条失败处理
+            state.attempts, state.error = 0, str(exc)
             return 0, str(exc)
 
     def synth_batch(
         self,
         indexes: list[int],
-        rate_of: dict[int, str | None],
+        rate_of: dict[int, str | None] | None = None,
         *,
         workers: int | None = None,
     ) -> None:
+        """并发合成一批；``rate_of`` 省略时沿用各条当前的语速（提语速才需要显式给）。"""
+
         if not indexes:
             return
+        rates = rate_of if rate_of is not None else {index: self.state(index).rate for index in indexes}
         with ThreadPoolExecutor(max_workers=workers or self.options.concurrency) as pool:
             futures = {
-                pool.submit(self.synth, index, rate_of.get(index)): index for index in indexes
+                pool.submit(self.synth, index, rates.get(index)): index for index in indexes
             }
             for future in as_completed(futures):
                 index = futures[future]
                 try:
-                    self.outcomes[index] = future.result()
-                except Exception as exc:  # noqa: BLE001
-                    self.outcomes[index] = (0, str(exc))
+                    future.result()
+                except Exception as exc:  # noqa: BLE001 - 连路径都算不出来时也得记一笔
+                    state = self.state(index)
+                    state.attempts, state.error = 0, str(exc)
 
 
 @dataclass(slots=True)
@@ -688,7 +723,9 @@ def _prepare(
         warnings=warnings,
     )
     _resolve_local_voices(session)
-    session.rates = {index: options.tts_rate for index in session.indexes}
+    session.cues = {
+        index: _CueState(rate=options.tts_rate) for index in session.indexes
+    }
     return session
 
 
@@ -721,18 +758,17 @@ def _synthesize(session: _Session) -> None:
     """
 
     indexes = session.indexes
-    session.synth_batch(indexes, session.rates)
+    session.synth_batch(indexes)
 
     # 1.05) 二次补跑（OPT-5）：高并发下 Edge-TTS 偶发连接错误（实测并发 10 时 86 条里有
     #      9 条 `Cannot connect to host speech.platform.bing.com`）。这类是网络抖动、
     #      不是配置问题：降并发再补一轮，能救回就不该标 failed。
     failed_after_first = [
-        index for index in indexes if session.outcomes[index][1] is not None
+        index for index in indexes if session.state(index).error is not None
     ]
     if failed_after_first:
         session.synth_batch(
             failed_after_first,
-            {index: session.options.tts_rate for index in failed_after_first},
             workers=max(1, min(3, len(failed_after_first))),
         )
 
@@ -750,13 +786,13 @@ def _downgrade_unavailable_voices(session: _Session) -> None:
     options = session.options
     if not options.voice_by_speaker:
         return
-    outcomes, cue_voices = session.outcomes, session.cue_voices
+    cue_voices = session.cue_voices
     retry_indexes = [
         index
         for index in session.indexes
-        if outcomes[index][1] is not None
+        if session.state(index).error is not None
         and cue_voices[index - 1] != options.voice
-        and _looks_like_voice_error(outcomes[index][1])
+        and _looks_like_voice_error(session.state(index).error)
     ]
     if not retry_indexes:
         return
@@ -766,11 +802,11 @@ def _downgrade_unavailable_voices(session: _Session) -> None:
                 "cue": index,
                 "from": cue_voices[index - 1],
                 "to": options.voice,
-                "error": str(outcomes[index][1])[:300],
+                "error": str(session.state(index).error)[:300],
             }
         )
         cue_voices[index - 1] = options.voice
-    session.synth_batch(retry_indexes, session.rates)
+    session.synth_batch(retry_indexes)
     grouped: dict[tuple[str, str], list[int]] = {}
     for item in session.downgrades:
         grouped.setdefault((str(item["from"]), str(item["to"])), []).append(
@@ -791,7 +827,7 @@ def _fallback_to_local_tts(session: _Session) -> None:
     options = session.options
     if options.tts_fallback != "local" or options.tts_provider == "local":
         return
-    pending = [index for index in session.indexes if session.outcomes[index][1] is not None]
+    pending = [index for index in session.indexes if session.state(index).error is not None]
     if not pending:
         return
 
@@ -835,7 +871,8 @@ def _fallback_to_local_tts(session: _Session) -> None:
             engine=local_tag,
             suffix=".wav",
         )
-        previous_error = str(session.outcomes[index][1])
+        state = session.state(index)
+        previous_error = str(state.error)
         try:
             attempts = _synth_with_retries(
                 fallback_engine,
@@ -845,15 +882,13 @@ def _fallback_to_local_tts(session: _Session) -> None:
                 retry_delay_s=0.0,
             )
         except Exception as exc:  # noqa: BLE001
-            session.outcomes[index] = (
-                session.outcomes[index][0],
-                f"{previous_error}；本地兜底也失败：{exc}",
-            )
+            state.error = f"{previous_error}；本地兜底也失败：{exc}"
             continue
-        session.final_paths[index] = path
-        session.fallback_set.add(index)
+        state.path = path
+        state.fallback = True
         session.cue_voices[index - 1] = local_voice
-        session.outcomes[index] = (session.outcomes[index][0] + attempts, None)
+        state.attempts += attempts
+        state.error = None
         session.fallback_events.append(
             {
                 "cue": index,
@@ -882,12 +917,13 @@ def _measure_durations(session: _Session) -> None:
     """2) 量时长：原始语速下这条真实说了多久。"""
 
     for index in session.indexes:
-        if session.outcomes[index][1] is not None:
+        state = session.state(index)
+        if state.error is not None:
             continue
         try:
-            session.audio_ms[index] = _media_duration_ms(session.final_paths[index])
+            state.audio_ms = _media_duration_ms(state.path)
         except DubError as exc:
-            session.outcomes[index] = (session.outcomes[index][0], str(exc))
+            state.error = str(exc)
 
 
 def _escalate_tight_cues(session: _Session) -> None:
@@ -902,11 +938,12 @@ def _escalate_tight_cues(session: _Session) -> None:
         return
     targets: list[tuple[int, str]] = []
     for index in session.indexes:
-        if session.outcomes[index][1] is not None or index not in session.audio_ms:
+        state = session.state(index)
+        if state.error is not None or state.audio_ms is None:
             continue
         cue = session.cue(index)
         action, _tempo = _plan_action(
-            session.audio_ms[index],
+            state.audio_ms,
             cue.timing.duration_ms,
             session.room_of(index),
             options.tempo_limit,
@@ -914,7 +951,7 @@ def _escalate_tight_cues(session: _Session) -> None:
         if action != "manual":
             continue
         rate = _choose_escalated_rate(
-            session.audio_ms[index],
+            state.audio_ms,
             cue.timing.duration_ms,
             session.room_of(index),
             options.tts_rate,
@@ -924,26 +961,27 @@ def _escalate_tight_cues(session: _Session) -> None:
     if not targets:
         return
 
-    failure_backup = {index: session.outcomes[index] for index, _ in targets}
+    # 提语速前先把"结论 + 语速"存起来：失败就整组回滚，报告与音频才对得上
+    backup = {index: session.state(index).snapshot() for index, _ in targets}
     session.synth_batch(
         [index for index, _ in targets], {index: rate for index, rate in targets}
     )
     notes: list[str] = []
     for index, rate in targets:
-        _attempts, error = session.outcomes[index]
-        if error is not None:
-            # 提语速失败：原来那条基准语速音频还在，照旧用它，只如实告警
-            session.outcomes[index] = failure_backup[index]
+        state = session.state(index)
+        if state.error is not None:
+            # 提语速失败：原来那条基准语速音频还在（path 没被改写），照旧用它，只如实告警
+            error = state.error
+            state.restore(backup[index])
             notes.append(f"第 {index} 条提语速到 {rate} 失败，保留原速音频：{error}")
             continue
         try:
-            session.audio_ms[index] = _media_duration_ms(session.final_paths[index])
+            state.audio_ms = _media_duration_ms(state.path)
         except DubError as exc:
-            session.outcomes[index] = failure_backup[index]
+            state.restore(backup[index])
             notes.append(f"第 {index} 条提语速后读不出时长，保留原速音频：{exc}")
             continue
-        session.rates[index] = rate
-        session.escalated[index] = rate
+        state.escalated = rate
     if notes:
         session.warnings.extend(notes)
 
@@ -956,7 +994,7 @@ def _plan_placements(session: _Session) -> None:
 
     options = session.options
     for index, cue in enumerate(session.cue_list, start=1):
-        attempts, error = session.outcomes[index]
+        state = session.state(index)
         slot_ms = cue.timing.duration_ms
         room_ms = session.room_of(index)
 
@@ -964,15 +1002,16 @@ def _plan_placements(session: _Session) -> None:
             "cue": index,
             "text": cue.text,
             "chars": len(cue.text),
-            "reused": session.cache_hits.get((index, session.rates[index]), False),
+            # 命中与否按**最终实际用的语速**查：提语速后那条是重新合成的，不能算复用
+            "reused": state.cache_hits.get(state.rate, False),
             "speaker": session.cue_speakers[index - 1] or None,
             "voice": session.cue_voices[index - 1],
             "provider": "local"
-            if options.tts_provider == "local" or index in session.fallback_set
+            if options.tts_provider == "local" or state.fallback
             else ("command" if options.tts_command else "edge"),
-            "fallback": index in session.fallback_set,
-            "rate": session.rates[index],
-            "rate_escalated": index in session.escalated,
+            "fallback": state.fallback,
+            "rate": state.rate,
+            "rate_escalated": state.escalated is not None,
             "slot_ms": slot_ms,
             "room_ms": room_ms,
             "audio_ms": 0,
@@ -981,17 +1020,20 @@ def _plan_placements(session: _Session) -> None:
             "played_overflow_pct": 0.0,
             "action": "none",
             "atempo": 1.0,
-            "attempts": attempts,
-            "error": error,
+            "attempts": state.attempts,
+            "error": state.error,
         }
 
-        if error is not None:
+        if state.error is not None:
             entry["action"] = "failed"
             session.entries.append(entry)
-            session.failures.append({"cue": index, "error": error})
+            session.failures.append({"cue": index, "error": state.error})
             continue
 
-        final_audio_ms = session.audio_ms[index]
+        final_audio_ms = state.audio_ms
+        if final_audio_ms is None:
+            # 不变量：没有 error 就应该量过时长（量失败会写回 error），这里显式兜底
+            raise DubError(f"第 {index} 条既没有错误也没有时长，状态不一致")
         action, tempo = _plan_action(final_audio_ms, slot_ms, room_ms, options.tempo_limit)
         overflow_pct = (final_audio_ms - slot_ms) / slot_ms * 100 if slot_ms > 0 else 0.0
         played_ms = (
@@ -1009,7 +1051,7 @@ def _plan_placements(session: _Session) -> None:
         )
         session.entries.append(entry)
 
-        pcm = _decode_to_pcm(session.final_paths[index], tempo, options.sample_rate)
+        pcm = _decode_to_pcm(state.path, tempo, options.sample_rate)
         start_ms = cue.timing.start_ms
         session.placements.append((start_ms, pcm))
         session.longest_end_ms = max(
@@ -1029,6 +1071,9 @@ def _render_track(session: _Session) -> Path:
     longest_end_ms = session.longest_end_ms
     if options.video is not None:
         longest_end_ms = max(longest_end_ms, session.video_ms or 0)
+    # 记回 session：报告里的 total_audio_ms 必须是**音轨实际长度**（含"补到视频长度"那一段），
+    # 否则会出现"报告说 146s、dubbed.wav 实际 154s"这种自己对不上的情况（真实素材踩到过）。
+    session.longest_end_ms = longest_end_ms
     total_samples = int(longest_end_ms * options.sample_rate / 1000) + options.sample_rate // 10
     master = array.array("h", bytes(2 * total_samples))
     for start_ms, pcm in session.placements:
@@ -1271,13 +1316,15 @@ def _build_report(session: _Session, outputs: _Outputs, *, status: str) -> dict[
             "reused": sum(
                 1
                 for index in session.indexes
-                if session.cache_hits.get((index, session.rates[index]), False)
+                if session.state(index).cache_hits.get(session.state(index).rate, False)
             ),
             "failed": len(session.failures),
             "overflow_over_10pct": len(overflow_listed),
             "played_overflow_over_10pct": len(played_overflow_listed),
             "fits_room": len(fits_room),
-            "rate_escalated": len(session.escalated),
+            "rate_escalated": sum(
+                1 for index in session.indexes if session.state(index).escalated is not None
+            ),
             "voice_downgrades": session.downgrades,
             "tts_fallback": {
                 "allowed": options.tts_fallback
