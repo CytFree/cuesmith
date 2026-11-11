@@ -19,7 +19,7 @@ import subprocess
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -28,7 +28,7 @@ from . import __version__
 from . import media
 from .bgm import BgmError, BgmOptions, BgmResult, run_bgm
 from .report import file_digest
-from .srt import load_srt
+from .srt import Cue, load_srt
 from .tts import (
     CommandTtsEngine,
     EdgeTtsEngine,
@@ -447,12 +447,188 @@ def _choose_escalated_rate(
     return fallback
 
 
+@dataclass(slots=True)
+class _Session:
+    """一次配音的现场：字幕、音色分配、引擎缓存，以及每条 cue 的合成状态。
+
+    这些状态原来是 ``run_dub`` 的局部变量，由 6 个嵌套函数通过闭包读写：``cue_voices``
+    会被"音色降级"和"本地兜底"就地改写，``outcomes``/``final_paths``/``audio_ms`` 由
+    "合成 → 量时长 → 提语速"三段分别维护。读那段代码时必须在脑子里同时维护十几个变量。
+    有名字、有归属之后，一段逻辑就是一个函数，也能单独测。
+    """
+
+    options: DubOptions
+    srt_path: Path
+    cue_list: list[Cue]
+    cache_dir: Path
+    video_ms: int | None
+    started_at: float
+    voice_map: dict[str, str]
+    speaker_by_cue: dict[int, str]
+    cue_speakers: list[str]
+    cue_voices: list[str]
+    default_engine: TtsEngine
+    engines: dict[tuple[str, str | None], TtsEngine]
+    warnings: list[str]
+    # 本地 TTS（OPT-11）：模型/类型只解析一次（探测 python 要起子进程）
+    local_info: tuple[Path, str] | None = None
+    # 每条 cue 的合成状态，键都是 cue 序号（1 起）
+    outcomes: dict[int, tuple[int, str | None]] = field(default_factory=dict)
+    # (cue, 语速) → 是否命中内容指纹缓存（提语速后那条是重新合成的，不能算复用）
+    cache_hits: dict[tuple[int, str | None], bool] = field(default_factory=dict)
+    # 每条最终使用的音频路径（Edge 或本地兜底都记这里；后续量时长/解码都用它）
+    final_paths: dict[int, Path] = field(default_factory=dict)
+    rates: dict[int, str | None] = field(default_factory=dict)
+    audio_ms: dict[int, int] = field(default_factory=dict)
+    escalated: dict[int, str] = field(default_factory=dict)
+    fallback_set: set[int] = field(default_factory=set)
+    downgrades: list[dict[str, object]] = field(default_factory=list)
+    fallback_events: list[dict[str, object]] = field(default_factory=list)
+    # 逐条结论（写进报告的 cues 段）与铺轨用的 PCM 片段
+    entries: list[dict[str, object]] = field(default_factory=list)
+    failures: list[dict[str, object]] = field(default_factory=list)
+    placements: list[tuple[int, array.array]] = field(default_factory=list)
+    longest_end_ms: int = 0
+
+    @property
+    def indexes(self) -> list[int]:
+        return list(range(1, len(self.cue_list) + 1))
+
+    def cue(self, index: int) -> Cue:
+        return self.cue_list[index - 1]
+
+    def text(self, index: int) -> str:
+        return self.cue_list[index - 1].text
+
+    def room_of(self, index: int) -> int:
+        """这条开始到下一条开始之间的可用时间（最后一条用视频长度兜底）。"""
+
+        cue = self.cue(index)
+        slot = cue.timing.duration_ms
+        if index < len(self.cue_list):
+            return max(slot, self.cue_list[index].timing.start_ms - cue.timing.start_ms)
+        return max(slot, (self.video_ms or 0) - cue.timing.start_ms)
+
+    def ensure_local_info(self) -> tuple[Path, str]:
+        if self.local_info is None:
+            self.local_info = _local_model_info(self.options)
+        return self.local_info
+
+    def engine_for(self, voice: str, rate: str | None) -> TtsEngine:
+        key = (voice, rate)
+        if key not in self.engines:
+            self.engines[key] = build_engine(self.options, voice, rate=rate)
+        return self.engines[key]
+
+    def audio_path(self, index: int, rate: str | None, *, voice: str | None = None) -> Path:
+        selected = self.cue_voices[index - 1] if voice is None else voice
+        tag, suffix = engine_tag(self.options, selected, rate, local_info=self.local_info)
+        return _cue_audio_path(
+            self.cache_dir,
+            index,
+            text=self.text(index),
+            voice=selected,
+            rate=rate,
+            command=self.options.tts_command,
+            engine=tag,
+            suffix=suffix,
+        )
+
+    def synth(self, index: int, rate: str | None) -> tuple[int, str | None]:
+        options = self.options
+        path = self.audio_path(index, rate)
+        if options.reuse_tts and path.is_file() and path.stat().st_size > 0:
+            self.cache_hits[(index, rate)] = True
+            self.final_paths[index] = path
+            return 0, None
+        self.cache_hits[(index, rate)] = False
+        try:
+            attempts = _synth_with_retries(
+                self.engine_for(self.cue_voices[index - 1], rate),
+                self.text(index),
+                path,
+                retries=options.retries,
+                retry_delay_s=options.retry_delay_s,
+            )
+            self.final_paths[index] = path
+            return attempts, None
+        except Exception as exc:  # noqa: BLE001 - 引擎异常类型不可控，按单条失败处理
+            return 0, str(exc)
+
+    def synth_batch(
+        self,
+        indexes: list[int],
+        rate_of: dict[int, str | None],
+        *,
+        workers: int | None = None,
+    ) -> None:
+        if not indexes:
+            return
+        with ThreadPoolExecutor(max_workers=workers or self.options.concurrency) as pool:
+            futures = {
+                pool.submit(self.synth, index, rate_of.get(index)): index for index in indexes
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    self.outcomes[index] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    self.outcomes[index] = (0, str(exc))
+
+
+@dataclass(slots=True)
+class _Outputs:
+    """落盘产物：对齐后的配音轨 / 混音轨 / 成片。"""
+
+    audio_path: Path
+    mixed_path: Path | None = None
+    video_path: Path | None = None
+    video_transcoded: bool = False
+    bgm_result: BgmResult | None = None
+
+
 def run_dub(
     options: DubOptions,
     *,
     engine: TtsEngine | None = None,
     engines: dict[str, TtsEngine] | None = None,
 ) -> DubResult:
+    session = _prepare(options, engine=engine, engines=engines)
+    _synthesize(session)
+    _measure_durations(session)
+    _escalate_tight_cues(session)
+    _plan_placements(session)
+    outputs = _Outputs(audio_path=_render_track(session))
+    outputs.bgm_result, outputs.mixed_path = _mix_bgm(session, outputs.audio_path)
+    outputs.video_path, outputs.video_transcoded = _mux_video(
+        session, outputs.mixed_path or outputs.audio_path
+    )
+    status = "ok" if not session.failures else "partial"
+    report = _build_report(session, outputs, status=status)
+    _close_local_workers()
+
+    report_path = Path(options.out) / "dub_report.json"
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    return DubResult(
+        status=status,
+        exit_code=0 if status == "ok" else 2,
+        report=report,
+        report_path=report_path.resolve(),
+        audio_path=outputs.audio_path.resolve(),
+        video_path=outputs.video_path.resolve() if outputs.video_path is not None else None,
+    )
+
+
+def _prepare(
+    options: DubOptions,
+    *,
+    engine: TtsEngine | None,
+    engines: dict[str, TtsEngine] | None,
+) -> _Session:
+    """校验输入、读字幕、分派音色、备好引擎缓存——真正开跑之前的一切。"""
+
     options.validate()
     srt_path = Path(options.srt)
     if not srt_path.is_file():
@@ -497,328 +673,307 @@ def run_dub(
     if engine is not None:
         engines_by_key[(options.voice, options.tts_rate)] = engine
 
-    # 本地 TTS（OPT-11）：模型/类型只解析一次（探测 python 要起子进程）
-    local_info: tuple[Path, str] | None = None
+    session = _Session(
+        options=options,
+        srt_path=srt_path,
+        cue_list=cue_list,
+        cache_dir=cache_dir,
+        video_ms=video_ms,
+        started_at=started_at,
+        voice_map=voice_map,
+        speaker_by_cue=speaker_by_cue,
+        cue_speakers=cue_speakers,
+        cue_voices=cue_voices,
+        default_engine=default_engine,
+        engines=engines_by_key,
+        warnings=warnings,
+    )
+    _resolve_local_voices(session)
+    session.rates = {index: options.tts_rate for index in session.indexes}
+    return session
 
-    def ensure_local_info() -> tuple[Path, str]:
-        nonlocal local_info
-        if local_info is None:
-            local_info = _local_model_info(options)
-        return local_info
 
-    # 本地 TTS 做主渠道时，把音色统一解析成本地 spec（Edge 风格 id 落到语言默认音色），
-    # 否则报告/缓存指纹里会一直显示用不了的 Edge 音色。
-    if options.tts_provider == "local":
-        _local_model, _local_kind = ensure_local_info()
-        from . import localtts as _localtts
+def _resolve_local_voices(session: _Session) -> None:
+    """本地 TTS 做主渠道时，把音色统一解析成本地 spec（Edge 风格 id 落到语言默认音色），
+    否则报告/缓存指纹里会一直显示用不了的 Edge 音色。"""
 
-        _default_local = _localtts.default_local_voice(_local_model, options.tgt_lang)
-        cue_voices = [
-            _local_voice_spec(options, voice) or _default_local for voice in cue_voices
-        ]
-        if options.voice_by_speaker and len({voice for voice in cue_voices if voice}) <= 1:
-            warnings.append(
-                "本地 TTS 下没有可用的本地音色映射：所有说话人会共用同一个本地音色"
-                "（多人声请用 --speaker-voices \"SPEAKER_00=50,SPEAKER_01=47\" 指定本地音色）"
-            )
+    options = session.options
+    if options.tts_provider != "local":
+        return
+    model, _kind = session.ensure_local_info()
+    from . import localtts as _localtts
 
-    def engine_for(voice: str, rate: str | None) -> TtsEngine:
-        key = (voice, rate)
-        if key not in engines_by_key:
-            engines_by_key[key] = build_engine(options, voice, rate=rate)
-        return engines_by_key[key]
-
-    def audio_path(index: int, rate: str | None, *, voice: str | None = None) -> Path:
-        selected = cue_voices[index - 1] if voice is None else voice
-        tag, suffix = engine_tag(options, selected, rate, local_info=local_info)
-        return _cue_audio_path(
-            cache_dir,
-            index,
-            text=cue_list[index - 1].text,
-            voice=selected,
-            rate=rate,
-            command=options.tts_command,
-            engine=tag,
-            suffix=suffix,
+    default_local = _localtts.default_local_voice(model, options.tgt_lang)
+    session.cue_voices = [
+        _local_voice_spec(options, voice) or default_local for voice in session.cue_voices
+    ]
+    if options.voice_by_speaker and len({voice for voice in session.cue_voices if voice}) <= 1:
+        session.warnings.append(
+            "本地 TTS 下没有可用的本地音色映射：所有说话人会共用同一个本地音色"
+            "（多人声请用 --speaker-voices \"SPEAKER_00=50,SPEAKER_01=47\" 指定本地音色）"
         )
 
-    # 每条最终使用的音频路径（Edge 或本地兜底都记这里；后续量时长/解码都用它）
-    final_paths: dict[int, Path] = {}
 
-    def room_of(index: int) -> int:
-        """这条开始到下一条开始之间的可用时间（最后一条用视频长度兜底）。"""
+def _synthesize(session: _Session) -> None:
+    """1) 并发合成（AC-7）：每条独立重试，失败不影响其他条目（AC-9）。
 
-        cue = cue_list[index - 1]
-        slot = cue.timing.duration_ms
-        if index < len(cue_list):
-            return max(slot, cue_list[index].timing.start_ms - cue.timing.start_ms)
-        return max(slot, (video_ms or 0) - cue.timing.start_ms)
+    内容指纹命中的音频直接复用（云端 TTS 按字符计费，重跑不该重复扣费）；
+    ``--regenerate-tts`` 时强制重新合成。
+    """
 
-    # 1) 并发合成（AC-7）：每条独立重试，失败不影响其他条目（AC-9）
-    #    内容指纹命中的音频直接复用（云端 TTS 按字符计费，重跑不该重复扣费）；
-    #    `--regenerate-tts` 时强制重新合成。
-    outcomes: dict[int, tuple[int, str | None]] = {}
-    # (cue, 语速) → 是否命中内容指纹缓存（提语速后那条是重新合成的，不能算复用）
-    cache_hits: dict[tuple[int, str | None], bool] = {}
-
-    def synth(index: int, rate: str | None) -> tuple[int, str | None]:
-        path = audio_path(index, rate)
-        if options.reuse_tts and path.is_file() and path.stat().st_size > 0:
-            cache_hits[(index, rate)] = True
-            final_paths[index] = path
-            return 0, None
-        cache_hits[(index, rate)] = False
-        try:
-            attempts = _synth_with_retries(
-                engine_for(cue_voices[index - 1], rate),
-                cue_list[index - 1].text,
-                path,
-                retries=options.retries,
-                retry_delay_s=options.retry_delay_s,
-            )
-            final_paths[index] = path
-            return attempts, None
-        except Exception as exc:  # noqa: BLE001 - 引擎异常类型不可控，按单条失败处理
-            return 0, str(exc)
-
-    def synth_batch(
-        indexes: list[int], rate_of: dict[int, str | None], *, workers: int | None = None
-    ) -> None:
-        if not indexes:
-            return
-        with ThreadPoolExecutor(max_workers=workers or options.concurrency) as pool:
-            futures = {
-                pool.submit(synth, index, rate_of.get(index)): index for index in indexes
-            }
-            for future in as_completed(futures):
-                index = futures[future]
-                try:
-                    outcomes[index] = future.result()
-                except Exception as exc:  # noqa: BLE001
-                    outcomes[index] = (0, str(exc))
-
-    indexes = list(range(1, len(cue_list) + 1))
-    rates: dict[int, str | None] = {index: options.tts_rate for index in indexes}
-    synth_batch(indexes, rates)
+    indexes = session.indexes
+    session.synth_batch(indexes, session.rates)
 
     # 1.05) 二次补跑（OPT-5）：高并发下 Edge-TTS 偶发连接错误（实测并发 10 时 86 条里有
     #      9 条 `Cannot connect to host speech.platform.bing.com`）。这类是网络抖动、
     #      不是配置问题：降并发再补一轮，能救回就不该标 failed。
-    failed_after_first = [index for index in indexes if outcomes[index][1] is not None]
+    failed_after_first = [
+        index for index in indexes if session.outcomes[index][1] is not None
+    ]
     if failed_after_first:
-        synth_batch(
+        session.synth_batch(
             failed_after_first,
-            {index: options.tts_rate for index in failed_after_first},
+            {index: session.options.tts_rate for index in failed_after_first},
             workers=max(1, min(3, len(failed_after_first))),
         )
 
-    # 1.1) 音色下线降级（OPT-4）：NoAudioReceived / 无效音色 → 该条改用默认音色重合成一次。
-    #      微软下线音色是真实发生过的（en-US-DavisNeural），不能因为多音色里有一个坏音色
-    #      就让整条链路 partial；降级要如实写进告警和报告。
-    downgrades: list[dict[str, object]] = []
+    _downgrade_unavailable_voices(session)
+    _fallback_to_local_tts(session)
+
+
+def _downgrade_unavailable_voices(session: _Session) -> None:
+    """1.1) 音色下线降级（OPT-4）：NoAudioReceived / 无效音色 → 该条改用默认音色重合成一次。
+
+    微软下线音色是真实发生过的（en-US-DavisNeural），不能因为多音色里有一个坏音色
+    就让整条链路 partial；降级要如实写进告警和报告。
+    """
+
+    options = session.options
+    if not options.voice_by_speaker:
+        return
+    outcomes, cue_voices = session.outcomes, session.cue_voices
+    retry_indexes = [
+        index
+        for index in session.indexes
+        if outcomes[index][1] is not None
+        and cue_voices[index - 1] != options.voice
+        and _looks_like_voice_error(outcomes[index][1])
+    ]
+    if not retry_indexes:
+        return
+    for index in retry_indexes:
+        session.downgrades.append(
+            {
+                "cue": index,
+                "from": cue_voices[index - 1],
+                "to": options.voice,
+                "error": str(outcomes[index][1])[:300],
+            }
+        )
+        cue_voices[index - 1] = options.voice
+    session.synth_batch(retry_indexes, session.rates)
+    grouped: dict[tuple[str, str], list[int]] = {}
+    for item in session.downgrades:
+        grouped.setdefault((str(item["from"]), str(item["to"])), []).append(
+            int(item["cue"])
+        )
+    for (source_voice, target_voice), cues in grouped.items():
+        session.warnings.append(
+            f"音色 {source_voice} 不可用（NoAudioReceived/无效音色），已把第 "
+            f"{'、'.join(str(cue) for cue in cues)} 条降级为默认音色 {target_voice}"
+            "（其余条目不受影响）"
+        )
+
+
+def _fallback_to_local_tts(session: _Session) -> None:
+    """1.2) 本地 TTS 兜底（OPT-11）：Edge 走网络失败（端点不可达/SSL 抖动/断网）时，
+    用本地 sherpa-onnx 把该条重新合成——宁可音色差一点，也不因为网络让整片 partial。"""
+
+    options = session.options
+    if options.tts_fallback != "local" or options.tts_provider == "local":
+        return
+    pending = [index for index in session.indexes if session.outcomes[index][1] is not None]
+    if not pending:
+        return
+
+    fallback_engine: TtsEngine | None = None
+    local_voice = ""
+    local_tag = ""
+    try:
+        from . import localtts as _localtts
+
+        model, kind = session.ensure_local_info()
+        local_voice = options.local_tts_voice or _localtts.default_local_voice(
+            model, options.tgt_lang
+        )
+        fallback_speed = _local_speed(options, options.tts_rate)
+        local_tag = f"local:{model.name}:{kind}:{fallback_speed:.3f}"
+        fallback_engine = _localtts.LocalTtsEngine(
+            _localtts.LocalTtsOptions(
+                model=model,
+                kind=kind,
+                python=_cached_local_python(options.local_tts_python),
+                threads=options.local_tts_threads,
+            ),
+            voice=local_voice,
+            language=options.tgt_lang,
+            speed=fallback_speed,
+        )
+    except Exception as exc:  # noqa: BLE001 - 兜底不可用不能拖垮主流程
+        session.warnings.append(f"Edge-TTS 失败且本地兜底不可用（{exc}），失败条目按失败处理")
+        fallback_engine = None
+    if fallback_engine is None:
+        return
+
+    for index in pending:
+        path = _cue_audio_path(
+            session.cache_dir,
+            index,
+            text=session.text(index),
+            voice=local_voice,
+            rate=options.tts_rate,
+            command=None,
+            engine=local_tag,
+            suffix=".wav",
+        )
+        previous_error = str(session.outcomes[index][1])
+        try:
+            attempts = _synth_with_retries(
+                fallback_engine,
+                session.text(index),
+                path,
+                retries=0,
+                retry_delay_s=0.0,
+            )
+        except Exception as exc:  # noqa: BLE001
+            session.outcomes[index] = (
+                session.outcomes[index][0],
+                f"{previous_error}；本地兜底也失败：{exc}",
+            )
+            continue
+        session.final_paths[index] = path
+        session.fallback_set.add(index)
+        session.cue_voices[index - 1] = local_voice
+        session.outcomes[index] = (session.outcomes[index][0] + attempts, None)
+        session.fallback_events.append(
+            {
+                "cue": index,
+                "from": "edge",
+                "to": "local",
+                "voice": local_voice,
+                "error": previous_error[:300],
+            }
+        )
+    if not session.fallback_events:
+        return
+    listed = "、".join(str(item["cue"]) for item in session.fallback_events[:10])
+    more = "…" if len(session.fallback_events) > 10 else ""
+    session.warnings.append(
+        f"Edge-TTS 失败 {len(session.fallback_events)} 条，已用本地 TTS 兜底"
+        f"（音色 {local_voice}）；第 {listed} 条{more}"
+        "（本地音色与 Edge 不同属正常）"
+    )
     if options.voice_by_speaker:
-        retry_indexes = [
-            index
-            for index in indexes
-            if outcomes[index][1] is not None
-            and cue_voices[index - 1] != options.voice
-            and _looks_like_voice_error(outcomes[index][1])
-        ]
-        if retry_indexes:
-            for index in retry_indexes:
-                downgrades.append(
-                    {
-                        "cue": index,
-                        "from": cue_voices[index - 1],
-                        "to": options.voice,
-                        "error": str(outcomes[index][1])[:300],
-                    }
-                )
-                cue_voices[index - 1] = options.voice
-            synth_batch(retry_indexes, rates)
-            grouped: dict[tuple[str, str], list[int]] = {}
-            for item in downgrades:
-                grouped.setdefault((str(item["from"]), str(item["to"])), []).append(
-                    int(item["cue"])
-                )
-            for (source_voice, target_voice), cues in grouped.items():
-                warnings.append(
-                    f"音色 {source_voice} 不可用（NoAudioReceived/无效音色），已把第 "
-                    f"{'、'.join(str(cue) for cue in cues)} 条降级为默认音色 {target_voice}"
-                    "（其余条目不受影响）"
-                )
+        session.warnings.append(
+            "本地兜底时多人声统一用同一个本地音色（不同说话人不再区分）"
+        )
 
-    # 1.2) 本地 TTS 兜底（OPT-11）：Edge 走网络失败（端点不可达/SSL 抖动/断网）时，
-    #      用本地 sherpa-onnx 把该条重新合成——宁可音色差一点，也不因为网络让整片 partial。
-    fallback_events: list[dict[str, object]] = []
-    fallback_set: set[int] = set()
-    if options.tts_fallback == "local" and options.tts_provider != "local":
-        pending_fallback = [index for index in indexes if outcomes[index][1] is not None]
-        if pending_fallback:
-            fallback_engine = None
-            local_voice = ""
-            local_tag = ""
-            try:
-                from . import localtts as _localtts
 
-                _model, _kind = ensure_local_info()
-                local_voice = (
-                    options.local_tts_voice
-                    or _localtts.default_local_voice(_model, options.tgt_lang)
-                )
-                fallback_speed = _local_speed(options, options.tts_rate)
-                local_tag = f"local:{_model.name}:{_kind}:{fallback_speed:.3f}"
-                fallback_engine = _localtts.LocalTtsEngine(
-                    _localtts.LocalTtsOptions(
-                        model=_model,
-                        kind=_kind,
-                        python=_cached_local_python(options.local_tts_python),
-                        threads=options.local_tts_threads,
-                    ),
-                    voice=local_voice,
-                    language=options.tgt_lang,
-                    speed=fallback_speed,
-                )
-            except Exception as exc:  # noqa: BLE001 - 兜底不可用不能拖垮主流程
-                warnings.append(f"Edge-TTS 失败且本地兜底不可用（{exc}），失败条目按失败处理")
-                fallback_engine = None
-            if fallback_engine is not None:
-                for index in pending_fallback:
-                    path = _cue_audio_path(
-                        cache_dir,
-                        index,
-                        text=cue_list[index - 1].text,
-                        voice=local_voice,
-                        rate=options.tts_rate,
-                        command=None,
-                        engine=local_tag,
-                        suffix=".wav",
-                    )
-                    previous_error = str(outcomes[index][1])
-                    try:
-                        attempts = _synth_with_retries(
-                            fallback_engine,
-                            cue_list[index - 1].text,
-                            path,
-                            retries=0,
-                            retry_delay_s=0.0,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        outcomes[index] = (
-                            outcomes[index][0],
-                            f"{previous_error}；本地兜底也失败：{exc}",
-                        )
-                        continue
-                    final_paths[index] = path
-                    fallback_set.add(index)
-                    cue_voices[index - 1] = local_voice
-                    outcomes[index] = (outcomes[index][0] + attempts, None)
-                    fallback_events.append(
-                        {
-                            "cue": index,
-                            "from": "edge",
-                            "to": "local",
-                            "voice": local_voice,
-                            "error": previous_error[:300],
-                        }
-                    )
-                if fallback_events:
-                    listed = "、".join(str(item["cue"]) for item in fallback_events[:10])
-                    more = "…" if len(fallback_events) > 10 else ""
-                    warnings.append(
-                        f"Edge-TTS 失败 {len(fallback_events)} 条，已用本地 TTS 兜底"
-                        f"（音色 {local_voice}）；第 {listed} 条{more}"
-                        "（本地音色与 Edge 不同属正常）"
-                    )
-                    if options.voice_by_speaker:
-                        warnings.append(
-                            "本地兜底时多人声统一用同一个本地音色（不同说话人不再区分）"
-                        )
+def _measure_durations(session: _Session) -> None:
+    """2) 量时长：原始语速下这条真实说了多久。"""
 
-    # 2) 量时长（原始语速下真实说多久）
-    audio_ms: dict[int, int] = {}
-    for index in indexes:
-        error = outcomes[index][1]
-        if error is not None:
+    for index in session.indexes:
+        if session.outcomes[index][1] is not None:
             continue
         try:
-            audio_ms[index] = _media_duration_ms(final_paths[index])
+            session.audio_ms[index] = _media_duration_ms(session.final_paths[index])
         except DubError as exc:
-            outcomes[index] = (outcomes[index][0], str(exc))
+            session.outcomes[index] = (session.outcomes[index][0], str(exc))
 
-    # 2.1) 自适应提语速（OPT-2）：怎么都放不进可用时间的条目，用同一音色提一档语速重合成。
-    #      TTS 自然加速（保留语调、只是说得快）比 atempo 硬压好听，所以优先走这条；
-    #      只对"连 atempo 上限都救不回来"的条目做，避免白白多花 TTS 调用。
-    escalated: dict[int, str] = {}
-    escalation_notes: list[str] = []
-    if options.adaptive_rate and not options.tts_command:
-        targets: list[tuple[int, str]] = []
-        for index in indexes:
-            if outcomes[index][1] is not None or index not in audio_ms:
-                continue
-            cue = cue_list[index - 1]
-            action, _tempo = _plan_action(
-                audio_ms[index], cue.timing.duration_ms, room_of(index), options.tempo_limit
-            )
-            if action != "manual":
-                continue
-            rate = _choose_escalated_rate(
-                audio_ms[index],
-                cue.timing.duration_ms,
-                room_of(index),
-                options.tts_rate,
-            )
-            if rate:
-                targets.append((index, rate))
-        if targets:
-            failure_backup = {index: outcomes[index] for index, _ in targets}
-            synth_batch(
-                [index for index, _ in targets], {index: rate for index, rate in targets}
-            )
-            for index, rate in targets:
-                _attempts, error = outcomes[index]
-                if error is not None:
-                    # 提语速失败：原来那条基准语速音频还在，照旧用它，只如实告警
-                    outcomes[index] = failure_backup[index]
-                    escalation_notes.append(
-                        f"第 {index} 条提语速到 {rate} 失败，保留原速音频：{error}"
-                    )
-                    continue
-                try:
-                    audio_ms[index] = _media_duration_ms(final_paths[index])
-                except DubError as exc:
-                    outcomes[index] = failure_backup[index]
-                    escalation_notes.append(f"第 {index} 条提语速后读不出时长，保留原速音频：{exc}")
-                    continue
-                rates[index] = rate
-                escalated[index] = rate
-            if escalation_notes:
-                warnings.extend(escalation_notes)
 
-    # 3) 逐条算时长与动作（AC-8：覆盖率 100%，溢出 >10% 必须列出）
-    entries: list[dict[str, object]] = []
-    placements: list[tuple[int, array.array]] = []
-    failures: list[dict[str, object]] = []
-    longest_end_ms = 0
+def _escalate_tight_cues(session: _Session) -> None:
+    """2.1) 自适应提语速（OPT-2）：怎么都放不进可用时间的条目，用同一音色提一档语速重合成。
 
-    for index, cue in enumerate(cue_list, start=1):
-        attempts, error = outcomes[index]
+    TTS 自然加速（保留语调、只是说得快）比 atempo 硬压好听，所以优先走这条；
+    只对"连 atempo 上限都救不回来"的条目做，避免白白多花 TTS 调用。
+    """
+
+    options = session.options
+    if not options.adaptive_rate or options.tts_command:
+        return
+    targets: list[tuple[int, str]] = []
+    for index in session.indexes:
+        if session.outcomes[index][1] is not None or index not in session.audio_ms:
+            continue
+        cue = session.cue(index)
+        action, _tempo = _plan_action(
+            session.audio_ms[index],
+            cue.timing.duration_ms,
+            session.room_of(index),
+            options.tempo_limit,
+        )
+        if action != "manual":
+            continue
+        rate = _choose_escalated_rate(
+            session.audio_ms[index],
+            cue.timing.duration_ms,
+            session.room_of(index),
+            options.tts_rate,
+        )
+        if rate:
+            targets.append((index, rate))
+    if not targets:
+        return
+
+    failure_backup = {index: session.outcomes[index] for index, _ in targets}
+    session.synth_batch(
+        [index for index, _ in targets], {index: rate for index, rate in targets}
+    )
+    notes: list[str] = []
+    for index, rate in targets:
+        _attempts, error = session.outcomes[index]
+        if error is not None:
+            # 提语速失败：原来那条基准语速音频还在，照旧用它，只如实告警
+            session.outcomes[index] = failure_backup[index]
+            notes.append(f"第 {index} 条提语速到 {rate} 失败，保留原速音频：{error}")
+            continue
+        try:
+            session.audio_ms[index] = _media_duration_ms(session.final_paths[index])
+        except DubError as exc:
+            session.outcomes[index] = failure_backup[index]
+            notes.append(f"第 {index} 条提语速后读不出时长，保留原速音频：{exc}")
+            continue
+        session.rates[index] = rate
+        session.escalated[index] = rate
+    if notes:
+        session.warnings.extend(notes)
+
+
+def _plan_placements(session: _Session) -> None:
+    """3) 逐条算时长与动作（AC-8：覆盖率 100%，溢出 >10% 必须列出），并解码 PCM。
+
+    解码放在这里而不是铺轨时：先知道每条 PCM 有多长，才能算出整条音轨要多长。
+    """
+
+    options = session.options
+    for index, cue in enumerate(session.cue_list, start=1):
+        attempts, error = session.outcomes[index]
         slot_ms = cue.timing.duration_ms
-        room_ms = room_of(index)
+        room_ms = session.room_of(index)
 
         entry: dict[str, object] = {
             "cue": index,
             "text": cue.text,
             "chars": len(cue.text),
-            "reused": cache_hits.get((index, rates[index]), False),
-            "speaker": cue_speakers[index - 1] or None,
-            "voice": cue_voices[index - 1],
+            "reused": session.cache_hits.get((index, session.rates[index]), False),
+            "speaker": session.cue_speakers[index - 1] or None,
+            "voice": session.cue_voices[index - 1],
             "provider": "local"
-            if options.tts_provider == "local" or index in fallback_set
+            if options.tts_provider == "local" or index in session.fallback_set
             else ("command" if options.tts_command else "edge"),
-            "fallback": index in fallback_set,
-            "rate": rates[index],
-            "rate_escalated": index in escalated,
+            "fallback": index in session.fallback_set,
+            "rate": session.rates[index],
+            "rate_escalated": index in session.escalated,
             "slot_ms": slot_ms,
             "room_ms": room_ms,
             "audio_ms": 0,
@@ -833,14 +988,16 @@ def run_dub(
 
         if error is not None:
             entry["action"] = "failed"
-            entries.append(entry)
-            failures.append({"cue": index, "error": error})
+            session.entries.append(entry)
+            session.failures.append({"cue": index, "error": error})
             continue
 
-        final_audio_ms = audio_ms[index]
+        final_audio_ms = session.audio_ms[index]
         action, tempo = _plan_action(final_audio_ms, slot_ms, room_ms, options.tempo_limit)
         overflow_pct = (final_audio_ms - slot_ms) / slot_ms * 100 if slot_ms > 0 else 0.0
-        played_ms = final_audio_ms if abs(tempo - 1.0) < 1e-9 else round(final_audio_ms / tempo)
+        played_ms = (
+            final_audio_ms if abs(tempo - 1.0) < 1e-9 else round(final_audio_ms / tempo)
+        )
         played_overflow = (played_ms - slot_ms) / slot_ms * 100 if slot_ms > 0 else 0.0
 
         entry.update(
@@ -851,107 +1008,147 @@ def run_dub(
             action=action,
             atempo=round(tempo, 3),
         )
-        entries.append(entry)
+        session.entries.append(entry)
 
-        pcm = _decode_to_pcm(final_paths[index], tempo, options.sample_rate)
+        pcm = _decode_to_pcm(session.final_paths[index], tempo, options.sample_rate)
         start_ms = cue.timing.start_ms
-        placements.append((start_ms, pcm))
-        longest_end_ms = max(
-            longest_end_ms,
+        session.placements.append((start_ms, pcm))
+        session.longest_end_ms = max(
+            session.longest_end_ms,
             cue.timing.end_ms,
             start_ms + int(len(pcm) * 1000 / options.sample_rate),
         )
 
-    # 3) 铺轨：每条按自己的槽位起点写入，不拼接、不顺延
-    #    视频比字幕长时，音轨要补到视频长度，否则 -shortest 会把画面截短（AC-14）
+
+def _render_track(session: _Session) -> Path:
+    """3.1) 铺轨：每条按自己的槽位起点写入，不拼接、不顺延。
+
+    视频比字幕长时，音轨要补到视频长度，否则 ``-shortest`` 会把画面截短（AC-14）。
+    """
+
+    options = session.options
+    longest_end_ms = session.longest_end_ms
     if options.video is not None:
-        longest_end_ms = max(longest_end_ms, video_ms or 0)
+        longest_end_ms = max(longest_end_ms, session.video_ms or 0)
     total_samples = int(longest_end_ms * options.sample_rate / 1000) + options.sample_rate // 10
     master = array.array("h", bytes(2 * total_samples))
-    for start_ms, pcm in placements:
+    for start_ms, pcm in session.placements:
         offset = int(start_ms * options.sample_rate / 1000)
         end = min(len(master), offset + len(pcm))
         if end <= offset:
             continue
         master[offset:end] = pcm[: end - offset]
 
-    audio_path = out_dir / "dubbed.wav"
+    audio_path = Path(options.out) / "dubbed.wav"
     _write_wav(audio_path, master, options.sample_rate)
+    return audio_path
 
-    # 4) 可选：保留 BGM（AC-21）——拆伴奏 → 侧链混音（配音一响伴奏让路）→ 并进视频
-    bgm_result: BgmResult | None = None
-    mixed_path: Path | None = None
-    # 配音轨是 24k 单声道；混音要按音乐规格走 44.1k 立体声（M9 实测：24k 单声道会把伴奏砍闷）
-    bgm_sample_rate = max(44100, options.sample_rate)
-    if options.keep_bgm:
-        source = Path(options.bgm_source or options.video)
-        try:
-            bgm_result = run_bgm(
-                BgmOptions(
-                    source=source,
-                    out_dir=out_dir / "bgm",
-                    mode=options.bgm_mode,
-                    separator_python=options.separator_python,
-                    bgm_gain_db=options.bgm_gain_db,
-                    duck_db=options.bgm_duck_db,
-                    mix_sample_rate=bgm_sample_rate,
-                    mix_channels=2,
-                ),
-                voice=audio_path,
-            )
-        except BgmError as exc:
-            raise DubError(f"BGM 处理失败：{exc}") from exc
-        mixed_path = bgm_result.mixed
-        warnings.extend(bgm_result.notes)
-    mux_audio = mixed_path or audio_path
 
-    # 5) 可选：直接并进视频（AC-14：h264 + aac，时长差 ≤0.5s）
-    video_path: Path | None = None
-    video_transcoded = False
-    if options.video is not None:
-        video_path = out_dir / "dubbed.mp4"
-        head = [
-            "-i",
-            str(options.video),
-            "-i",
-            str(mux_audio),
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-        ]
-        try:
-            if _video_codec(Path(options.video)) == "h264":
-                _run([*head, "-c:v", "copy", str(video_path)], what="合成配音视频")
-            else:
-                raise DubError("源视频不是 h264，需要转码")
-        except DubError:
-            # VP9/HEVC/ProRes 等：统一转 h264，保证"h264 + aac"的成品口径（AC-14）
-            video_path.unlink(missing_ok=True)
-            video_transcoded = True
-            _run(
-                [
-                    *head,
-                    "-c:v",
-                    "libx264",
-                    "-crf",
-                    "18",
-                    "-preset",
-                    "veryfast",
-                    "-pix_fmt",
-                    "yuv420p",
-                    str(video_path),
-                ],
-                what="合成配音视频（视频转码）",
-            )
+def _mix_bgm(session: _Session, audio_path: Path) -> tuple[BgmResult | None, Path | None]:
+    """4) 可选：保留 BGM（AC-21）——拆伴奏 → 侧链混音（配音一响伴奏让路）→ 并进视频。"""
 
-    wall_s = time.monotonic() - started_at
-    overflow_listed = [entry for entry in entries if float(entry["overflow_pct"]) > OVERFLOW_MANUAL_THRESHOLD_PCT]
+    options = session.options
+    if not options.keep_bgm:
+        return None, None
+    source = Path(options.bgm_source or options.video)
+    try:
+        # 配音轨是 24k 单声道；混音要按音乐规格走 44.1k 立体声
+        # （M9 实测：24k 单声道会把伴奏砍闷）
+        result = run_bgm(
+            BgmOptions(
+                source=source,
+                out_dir=Path(options.out) / "bgm",
+                mode=options.bgm_mode,
+                separator_python=options.separator_python,
+                bgm_gain_db=options.bgm_gain_db,
+                duck_db=options.bgm_duck_db,
+                mix_sample_rate=_bgm_sample_rate(options),
+                mix_channels=2,
+            ),
+            voice=audio_path,
+        )
+    except BgmError as exc:
+        raise DubError(f"BGM 处理失败：{exc}") from exc
+    session.warnings.extend(result.notes)
+    return result, result.mixed
+
+
+def _mux_video(session: _Session, mux_audio: Path) -> tuple[Path | None, bool]:
+    """5) 可选：直接并进视频（AC-14：h264 + aac，时长差 ≤0.5s）。"""
+
+    options = session.options
+    if options.video is None:
+        return None, False
+    video_path = Path(options.out) / "dubbed.mp4"
+    head = [
+        "-i",
+        str(options.video),
+        "-i",
+        str(mux_audio),
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-shortest",
+    ]
+    try:
+        if _video_codec(Path(options.video)) == "h264":
+            _run([*head, "-c:v", "copy", str(video_path)], what="合成配音视频")
+            return video_path, False
+        raise DubError("源视频不是 h264，需要转码")
+    except DubError:
+        # VP9/HEVC/ProRes 等：统一转 h264，保证"h264 + aac"的成品口径（AC-14）
+        video_path.unlink(missing_ok=True)
+        _run(
+            [
+                *head,
+                "-c:v",
+                "libx264",
+                "-crf",
+                "18",
+                "-preset",
+                "veryfast",
+                "-pix_fmt",
+                "yuv420p",
+                str(video_path),
+            ],
+            what="合成配音视频（视频转码）",
+        )
+        return video_path, True
+
+
+def _bgm_sample_rate(options: DubOptions) -> int:
+    return max(44100, options.sample_rate)
+
+
+def _close_local_workers() -> None:
+    """关掉本地 TTS 常驻 worker：常驻进程能省模型加载，但跑完要释放内存。"""
+
+    try:
+        from . import localtts as _localtts
+
+        _localtts.close_all_workers()
+    except Exception:  # noqa: BLE001 - 清理失败不影响成品
+        pass
+
+
+def _build_report(session: _Session, outputs: _Outputs, *, status: str) -> dict[str, object]:
+    """组装 ``dub_report.json``：输入指纹、生效配置、逐条结论、汇总与产物路径。"""
+
+    options = session.options
+    entries = session.entries
+    cue_speakers = session.cue_speakers
+    cue_voices = session.cue_voices
+    wall_s = time.monotonic() - session.started_at
+    overflow_listed = [
+        entry
+        for entry in entries
+        if float(entry["overflow_pct"]) > OVERFLOW_MANUAL_THRESHOLD_PCT
+    ]
     played_overflow_listed = [
         entry
         for entry in entries
@@ -965,7 +1162,6 @@ def run_dub(
         for entry in entries
         if entry["action"] != "failed" and int(entry["played_ms"]) <= int(entry["room_ms"])
     ]
-    status = "ok" if not failures else "partial"
 
     voice_stats: list[dict[str, object]] = []
     for voice in dict.fromkeys(cue_voices):
@@ -980,7 +1176,7 @@ def run_dub(
             }
         )
 
-    srt_size, srt_sha = file_digest(srt_path)
+    srt_size, srt_sha = file_digest(session.srt_path)
     speakers_meta: dict[str, object] | None = None
     if options.speakers_path is not None:
         speakers_file = Path(options.speakers_path)
@@ -989,10 +1185,11 @@ def run_dub(
             "path": str(speakers_file.resolve()),
             "bytes": speakers_size,
             "sha256": speakers_sha,
-            "cues": len(speaker_by_cue),
+            "cues": len(session.speaker_by_cue),
         }
+    local_info = session.local_info
     generated_at = options.generated_at or datetime.now().astimezone()
-    report: dict[str, object] = {
+    return {
         "schema_version": 1,
         "tool": "submatrix",
         "version": __version__,
@@ -1000,13 +1197,18 @@ def run_dub(
         "generated_at": generated_at.isoformat(),
         "status": status,
         "input": {
-            "srt": {"path": str(srt_path.resolve()), "bytes": srt_size, "sha256": srt_sha, "cues": len(cue_list)},
+            "srt": {
+                "path": str(session.srt_path.resolve()),
+                "bytes": srt_size,
+                "sha256": srt_sha,
+                "cues": len(session.cue_list),
+            },
             "speakers": speakers_meta,
             "video": str(Path(options.video).resolve()) if options.video is not None else None,
         },
         "config": {
             "voice": options.voice,
-            "voice_by_speaker": dict(voice_map),
+            "voice_by_speaker": dict(session.voice_map),
             "speakers_path": str(Path(options.speakers_path).resolve())
             if options.speakers_path is not None
             else None,
@@ -1023,12 +1225,10 @@ def run_dub(
             "retries": options.retries,
             "tempo_limit": options.tempo_limit,
             "sample_rate": options.sample_rate,
-            "engine": type(default_engine).__name__,
-            "tts_python": getattr(default_engine, "python", None),
+            "engine": type(session.default_engine).__name__,
+            "tts_python": getattr(session.default_engine, "python", None),
             # 本地 TTS（OPT-11）：provider=local 时是主渠道；primary=edge 时 fallback 决定是否兜底
-            "tts_provider": "command"
-            if options.tts_command
-            else options.tts_provider,
+            "tts_provider": "command" if options.tts_command else options.tts_provider,
             "tts_fallback": options.tts_fallback
             if options.tts_provider == "edge" and not options.tts_command
             else "off",
@@ -1057,34 +1257,36 @@ def run_dub(
                 else None,
                 "gain_db": options.bgm_gain_db,
                 "duck_db": options.bgm_duck_db,
-                "mix_sample_rate": bgm_sample_rate if options.keep_bgm else None,
+                "mix_sample_rate": _bgm_sample_rate(options) if options.keep_bgm else None,
                 "mix_channels": 2 if options.keep_bgm else None,
             },
         },
         "summary": {
-            "cues": len(cue_list),
-            "synthesized": len(cue_list) - len(failures),
+            "cues": len(session.cue_list),
+            "synthesized": len(session.cue_list) - len(session.failures),
             "reused": sum(
-                1 for index in indexes if cache_hits.get((index, rates[index]), False)
+                1
+                for index in session.indexes
+                if session.cache_hits.get((index, session.rates[index]), False)
             ),
-            "failed": len(failures),
+            "failed": len(session.failures),
             "overflow_over_10pct": len(overflow_listed),
             "played_overflow_over_10pct": len(played_overflow_listed),
             "fits_room": len(fits_room),
-            "rate_escalated": len(escalated),
-            "voice_downgrades": downgrades,
+            "rate_escalated": len(session.escalated),
+            "voice_downgrades": session.downgrades,
             "tts_fallback": {
                 "allowed": options.tts_fallback
                 if options.tts_provider == "edge" and not options.tts_command
                 else "off",
-                "events": fallback_events,
+                "events": session.fallback_events,
             },
             "local_tts": {
                 "used": bool(local_info is not None),
                 "kind": local_info[1] if local_info is not None else None,
                 "model": str(local_info[0]) if local_info is not None else None,
-                "voices": sorted({str(item["voice"]) for item in fallback_events})
-                if fallback_events
+                "voices": sorted({str(item["voice"]) for item in session.fallback_events})
+                if session.fallback_events
                 else (
                     sorted({voice for voice in cue_voices if voice})
                     if options.tts_provider == "local"
@@ -1096,46 +1298,29 @@ def run_dub(
             "absorbed": len(absorbed),
             "speakers": len({speaker for speaker in cue_speakers if speaker}),
             "voices": voice_stats,
-            "total_audio_ms": longest_end_ms,
+            "total_audio_ms": session.longest_end_ms,
             "bgm": {
-                "mode": bgm_result.mode,
-                "separator": bgm_result.separator,
-                "wall_s": bgm_result.wall_s,
-                "mix_sample_rate": bgm_result.mix_sample_rate,
-                "mix_channels": bgm_result.mix_channels,
+                "mode": outputs.bgm_result.mode,
+                "separator": outputs.bgm_result.separator,
+                "wall_s": outputs.bgm_result.wall_s,
+                "mix_sample_rate": outputs.bgm_result.mix_sample_rate,
+                "mix_channels": outputs.bgm_result.mix_channels,
             }
-            if bgm_result is not None
+            if outputs.bgm_result is not None
             else None,
             "wall_s": round(wall_s, 2),
         },
         "cues": entries,
-        "failures": failures,
-        "warnings": warnings,
+        "failures": session.failures,
+        "warnings": session.warnings,
         "outputs": {
-            "audio": str(audio_path.resolve()),
-            "mixed": str(mixed_path.resolve()) if mixed_path is not None else None,
-            "video": str(video_path.resolve()) if video_path is not None else None,
-            "video_transcoded": video_transcoded,
+            "audio": str(outputs.audio_path.resolve()),
+            "mixed": str(outputs.mixed_path.resolve())
+            if outputs.mixed_path is not None
+            else None,
+            "video": str(outputs.video_path.resolve())
+            if outputs.video_path is not None
+            else None,
+            "video_transcoded": outputs.video_transcoded,
         },
     }
-    # 收尾：关掉本地 TTS 常驻 worker（常驻进程能省模型加载，但跑完要释放内存）
-    try:
-        from . import localtts as _localtts
-
-        _localtts.close_all_workers()
-    except Exception:  # noqa: BLE001 - 清理失败不影响成品
-        pass
-
-    report_path = out_dir / "dub_report.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
-
-    return DubResult(
-        status=status,
-        exit_code=0 if status == "ok" else 2,
-        report=report,
-        report_path=report_path.resolve(),
-        audio_path=audio_path.resolve(),
-        video_path=video_path.resolve() if video_path is not None else None,
-    )
