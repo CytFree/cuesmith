@@ -20,3 +20,5 @@ packages = ["submatrix"]
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
+# slow：真实素材 / 耗时用例（tests/test_real_sample.py），默认跳过，需要显式环境变量开启
+markers = ["slow: 真实素材或耗时用例，默认不跑"]

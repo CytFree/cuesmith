@@ -139,9 +139,19 @@ BGM 保留（demucs + torch CPU）的安装命令见
 ### 3.5 装完自检
 
 ```powershell
-python -m pytest -q                          # 751 passed
+python -m pytest -q                          # 838 passed, 4 skipped
 python tools\run_samples.py --out work\regression   # 27/27
 spike\gui\.venv\Scripts\python.exe tools\gui_smoke.py   # GUI HTTP 200
+```
+
+测试默认**不碰真实素材**（全用假引擎 / 6 秒彩条视频，跑得快且可重复）。真实素材的回归
+按需开启，见 `tests/test_real_sample.py`：
+
+```powershell
+$env:SUBMATRIX_REAL_VIDEO = "D:\...\你的视频.mp4"     # 真视频探一次 + 二次命中缓存（约 2 秒）
+$env:SUBMATRIX_REAL_OUT   = "work/cctv-demo"          # 已有产物树：报告数字 vs 盘上文件（约 1 秒）
+$env:SUBMATRIX_REAL_E2E   = "1"                        # 全链路真跑（约 5 分钟，含真 ASR，离线）
+python -m pytest tests/test_real_sample.py -q -m slow
 ```
 
 ---
