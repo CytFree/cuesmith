@@ -6,6 +6,10 @@
 
 设计要点：
 
+- **流程表说了算**：阶段顺序写在模块末尾的 `_STEPS` 里（`_Step(阶段名, 函数)`），每个阶段
+  一个 `_stage_*` 函数，自负三件事：判缓存（`_xxx_cache_hit`）→ 跑生产函数 → 写阶段条目。
+  不在阶段清单里的衔接动作也是 `_Step`，但 `stage=None`（合并后重建说话人映射、翻译前
+  过滤噪声 cue）——它们占流程位置，但不受 `--stop-after` 控制。
 - **阶段缓存**：默认复用 `out/<stage>/` 里已存在的产物（`--force` 强制重跑）。
   改字幕重跑时，前面已完成的重活（ASR/翻译）不会白跑；缓存还要校验上游文件 sha256，
   **人工校对过的字幕会让下游阶段自动失效重跑**，而不是拿旧结果硬走。
@@ -34,7 +38,7 @@ import hashlib
 import json
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import math
 from pathlib import Path
@@ -44,7 +48,7 @@ from . import __version__
 from .asr import AsrError, AsrOptions, model_variant, preferred_model, run_asr
 from .burn import BurnError, BurnOptions, run_burn
 from .clean import cleanup_speakers, cleanup_srt
-from .cost import CostError, build_cost, format_cost_line, load_pricing
+from .cost import CostError, build_cost, load_pricing
 from .diarize import (
     CLUSTERING_MODES,
     DEFAULT_MERGE_ALPHA_COMPACT,
@@ -54,13 +58,11 @@ from .diarize import (
     SEGMENTS_NAME,
     DiarizeError,
     DiarizeOptions,
-    DiarizeResult,
     SpeakerTurn,
     assign_speakers,
     attach_speakers,
     build_speaker_voice_map,
     default_threshold,
-    find_vad_model,
     load_segments,
     parse_speaker_voices,
     run_diarize,
@@ -446,25 +448,108 @@ def _translation_summary(report: dict[str, object]) -> dict[str, object]:
     }
 
 
-def run_pipeline(options: PipelineOptions) -> PipelineResult:
-    options.validate()
-    source = Path(options.src)
-    if not source.is_file():
-        raise PipelineError(f"输入文件不存在：{source}")
-    out_dir = Path(options.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
-    started_at = options.generated_at or datetime.now().astimezone()
+def _report_config(
+    options: PipelineOptions, stages: Sequence[dict[str, object]]
+) -> dict[str, object]:
+    """``pipeline.json`` 的 config 段：只写"实际生效"的值，关掉的开关写 None。
 
-    stages: list[dict[str, object]] = []
-    warnings: list[str] = []
-    outputs: dict[str, str] = {}
-    status = "ok"
-    resolved_src_lang = options.src_lang
-    # OPT-5：ASR 期间后台预取的 diarize 分段（None = 没有预取）
-    diarize_prefetch: object | None = None
+    这一段是用来复盘"这次到底拿什么参数跑出来的"，所以宁可累赘也不省略；写错字段的
+    表现是看报告时以为参数没生效。
+    """
+
+    needs_diarize = _needs_diarize(options)
+    capacity = _dub_capacity_cps(options)
+    return {
+        "src_lang": options.src_lang,
+        "tgt_lang": options.tgt_lang,
+        "provider": _resolve_provider(options),
+        "llm_review": options.llm_review if options.llm else False,
+        "glossary_terms": len(options.glossary) if options.glossary else 0,
+        "condense": options.condense,
+        "condense_mode": options.condense_mode if options.condense else None,
+        "translate_fallback": options.translate_fallback,
+        "translate_concurrency": options.translate_concurrency,
+        "merge": options.merge,
+        "merge_max_duration": options.merge_max_duration if options.merge else None,
+        "merge_max_gap": options.merge_max_gap if options.merge else None,
+        "diarize": needs_diarize,
+        "speakers": options.speakers or None,
+        "diarization_threshold": _effective_diarize_threshold(options, stages)
+        if needs_diarize
+        else None,
+        "keep_minor_speakers": options.keep_minor_speakers if needs_diarize else None,
+        "vad": options.vad if needs_diarize else None,
+        "vad_threshold": options.vad_threshold if needs_diarize and options.vad else None,
+        "clustering": options.clustering if needs_diarize else None,
+        "merge_alpha": options.merge_alpha if needs_diarize else None,
+        "speaker_voices": options.speaker_voices,
+        "wrap": options.wrap,
+        "voice": options.voice or DEFAULT_VOICES.get(options.tgt_lang),
+        "tts_rate": _tts_rate(options),
+        "dub_capacity_cps": round(capacity, 2) if capacity is not None else None,
+        "tts_command": options.tts_command,
+        "tts_provider": "command" if options.tts_command else options.tts_provider,
+        "tts_fallback": options.tts_fallback
+        if options.tts_provider == "edge" and not options.tts_command
+        else "off",
+        "local_tts": {
+            "model": options.local_tts_model,
+            "kind": options.local_tts_kind,
+            "voice": options.local_tts_voice or None,
+            "speed": options.local_tts_speed,
+            "threads": options.local_tts_threads,
+            "fingerprint": _local_tts_fingerprint(options),
+        },
+        "regenerate_tts": options.regenerate_tts,
+        "tempo_limit": options.tempo_limit,
+        "adaptive_rate": options.adaptive_rate,
+        "keep_bgm": options.keep_bgm,
+        "bgm_mode": options.bgm_mode if options.keep_bgm else None,
+        "burn_subtitles": options.burn_subtitles,
+        "burn_mode": options.burn_mode if options.burn_subtitles else None,
+        "burn_crf": options.burn_crf if options.burn_subtitles else None,
+        "burn_position": options.burn_position if options.burn_subtitles else None,
+        "mark": options.mark,
+        "force": options.force,
+        "stop_after": options.stop_after,
+        "pricing": options.pricing,
+    }
+
+
+@dataclass(slots=True)
+class _Run:
+    """一次 pipeline 运行的账本：阶段清单、告警、产物、总体状态，以及"怎么收尾"。
+
+    以前这些是 ``run_pipeline`` 的局部变量，每个失败分支都要把 9 个变量原样转交给
+    ``_finish``（一共 17 处），少传一个是 bug、传错顺序更难看出来。收进对象之后，
+    失败是一句 ``return run.fail(stage, exc)``，收尾是一句 ``run.finish()``。
+    """
+
+    options: PipelineOptions
+    source: Path
+    out_dir: Path
+    started: float
+    started_at: datetime
+    stages: list[dict[str, object]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    outputs: dict[str, str] = field(default_factory=dict)
+    status: str = "ok"
+    _source_sha: str | None = None
+
+    def source_sha256(self) -> str:
+        """源文件 sha256 只算一次：probe / asr 的缓存判据都要它，长视频不能重读一遍。"""
+
+        if self._source_sha is None:
+            self._source_sha = _sha256(self.source)
+        return self._source_sha
+
+    def cached(self, *paths: Path) -> bool:
+        """这些产物齐了、且没加 ``--force``，才允许走缓存分支。"""
+
+        return not self.options.force and all(Path(path).is_file() for path in paths)
 
     def record(
+        self,
         stage: str,
         state: str,
         *,
@@ -473,6 +558,8 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
         summary: dict[str, object] | None = None,
         error: str | None = None,
     ) -> None:
+        """往 ``pipeline.json`` 的 stages 里追加一条；``wall`` 只记真正干了活的时间。"""
+
         entry: dict[str, object] = {
             "stage": stage,
             "status": state,
@@ -483,241 +570,621 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
             entry["summary"] = summary
         if error:
             entry["error"] = error
-        stages.append(entry)
+        self.stages.append(entry)
 
-    def cached(*paths: Path) -> bool:
-        return not options.force and all(Path(path).is_file() for path in paths)
+    def note(self, message: str) -> None:
+        """记一条告警：成片仍然可用，但用户需要知道发生了什么。"""
 
-    def should_stop(stage: str) -> bool:
-        return options.stop_after == stage
+        self.warnings.append(message)
 
-    def fail(stage: str, error: Exception) -> None:
-        nonlocal status
-        status = "failed"
-        record(stage, "failed", error=str(error))
+    def carry_warnings(self, report: Mapping[str, object]) -> None:
+        """把生产函数报告里的 warnings 原样带进 ``pipeline.json``。"""
 
-    # 源文件 sha256 只算一次：probe / asr 的缓存判据都要它，长视频不能每个阶段重读一遍
-    source_sha: str | None = None
+        self.warnings.extend(str(item) for item in report.get("warnings") or [])
 
-    def source_sha256() -> str:
-        nonlocal source_sha
-        if source_sha is None:
-            source_sha = _sha256(source)
-        return source_sha
+    def fail(self, stage: str, error: Exception) -> bool:
+        """记失败并返回 False：阶段函数 ``return`` 它，主循环就在这里收尾。"""
 
-    # ------------------------------------------------------------------ 1. probe
-    probe_dir = out_dir / "probe"
-    probe_status = ""
+        self.status = "failed"
+        self.record(stage, "failed", error=str(error))
+        return False
+
+    def entry(self, stage: str) -> dict[str, object] | None:
+        """该阶段最近一条清单项——阶段跑完之后回填摘要用（例如合并后重建的说话人）。"""
+
+        for item in reversed(self.stages):
+            if item.get("stage") == stage:
+                return item
+        return None
+
+    def finish(self) -> PipelineResult:
+        """折算成本、写 ``pipeline.json``、按状态给退出码；成功/失败/半成功都走这里。"""
+
+        options = self.options
+        try:
+            pricing = load_pricing(options.pricing)
+        except CostError as exc:
+            raise PipelineError(str(exc)) from exc
+        # 产物累计口径：从各阶段报告抽量再折算；缓存重跑数字不变
+        cost = build_cost(
+            self.out_dir,
+            tts_command=options.tts_command,
+            pricing=pricing,
+            pricing_path=options.pricing,
+        )
+        report_path = self.out_dir / "pipeline.json"
+        self.outputs["pipeline_report"] = str(report_path.resolve())
+        size, digest = file_digest(self.source)
+        report: dict[str, object] = {
+            "schema_version": 1,
+            "tool": "submatrix",
+            "version": __version__,
+            "command": "pipeline",
+            "generated_at": self.started_at.isoformat(),
+            "status": self.status,
+            "input": {
+                "path": str(self.source.resolve()),
+                "bytes": size,
+                "sha256": digest,
+            },
+            "config": _report_config(options, self.stages),
+            "stages": self.stages,
+            "cost": cost,
+            "outputs": self.outputs,
+            "warnings": list(dict.fromkeys(self.warnings)),
+            "wall_s": round(time.monotonic() - self.started, 1),
+        }
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        exit_code = EXIT_OK if self.status == "ok" else EXIT_PARTIAL
+        return PipelineResult(
+            status=self.status,
+            exit_code=exit_code,
+            report=report,
+            report_path=report_path.resolve(),
+            outputs=self.outputs,
+        )
+
+
+@dataclass(slots=True)
+class _Track:
+    """阶段之间传递的产物链：每个阶段读上一段、写下一段。
+
+    ``subtitle_path`` 与 ``working_srt`` 刻意分开：前者是 ASR/内封直出的**原始**字幕，
+    后者是"当前这一版"（merge 合并、clean 过滤都会换成新文件）。合并之后仍然要用原始
+    字幕重建说话人映射，所以两者不能合并成一个变量。
+    """
+
+    src_lang: str
+    probe_status: str = ""
     subtitle_path: Path | None = None
-    # 内封字幕路线要求显式源语言；auto 时 probe 层统一按 zh 探测（与 ProbeOptions 一致）
-    probe_src_lang = options.src_lang if options.src_lang != "auto" else "zh"
+    working_srt: Path | None = None
+    # 原始字幕每条 cue 的说话人（合并后重映射要用）
+    cue_speakers: tuple[str, ...] = ()
+    speakers_path: Path | None = None
+    speaker_voice_map: dict[str, str] = field(default_factory=dict)
+    translated_srt: Path | None = None
+    dubbed_video: Path | None = None
+    mark_input: Path | None = None
+    # OPT-5：ASR 期间后台预取的 diarize 分段（None = 没有预取）
+    diarize_prefetch: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Step:
+    """流程里的一步。``stage`` 为 None 表示"衔接钩子"。
+
+    钩子不在 ``--stop-after`` 清单里，也不一定产出阶段条目（clean 就是把结论回填到
+    merge 的摘要上）。但它们必须在流程里占一个位置，而不能偷偷塞进相邻阶段的末尾：
+    ``--stop-after merge`` 要停在"合并完成"那一刻，不能连"合并后的说话人重建"也顺手做掉。
+    """
+
+    stage: str | None
+    fn: Callable[[_Run, _Track], bool]
+
+
+def run_pipeline(options: PipelineOptions) -> PipelineResult:
+    options.validate()
+    source = Path(options.src)
+    if not source.is_file():
+        raise PipelineError(f"输入文件不存在：{source}")
+    out_dir = Path(options.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run = _Run(
+        options=options,
+        source=source,
+        out_dir=out_dir,
+        started=time.monotonic(),
+        started_at=options.generated_at or datetime.now().astimezone(),
+    )
+    track = _Track(src_lang=options.src_lang)
+    for step in _STEPS:
+        if not step.fn(run, track):
+            break
+        # `--stop-after` 的含义是"跑完这个阶段就停"，所以判定必须在阶段跑完之后
+        if step.stage is not None and options.stop_after == step.stage:
+            break
+    return run.finish()
+
+
+# ----------------------------------------------------------------------------
+# 阶段缓存的判据（每阶段一个函数；"缺字段＝重跑"的口径见 `_config_matches`）
+# ----------------------------------------------------------------------------
+
+
+def _probe_src_lang(options: PipelineOptions) -> str:
+    """probe 探测用的源语言：``auto`` 统一按 zh（与 ``ProbeOptions`` 的默认口径一致）。
+
+    内封字幕路线要求显式源语言——字幕流本身没有可靠的语言标记。
+    """
+
+    return options.src_lang if options.src_lang != "auto" else "zh"
+
+
+def _probe_cache_hit(run: _Run, manifest: dict[str, object]) -> bool:
+    """probe 缓存判据：必须绑到"这个视频 + 这个源语言"。
+
+    只看 ``manifest.json`` 是否存在时，换一个视频复用同一个 ``--out`` 会直接输出上一条
+    视频的字幕（真实翻车），所以输入 sha256 与源语言都要对得上。``--force`` 仍然要先挡掉：
+    空 manifest（读不出来）一律当没缓存。
+    """
+
+    probe_dir = run.out_dir / "probe"
+    return (
+        run.cached(probe_dir / "manifest.json")
+        and bool(manifest)
+        and _config_matches(
+            manifest,
+            {
+                "input": {"sha256": run.source_sha256()},
+                "src_lang": _probe_src_lang(run.options),
+            },
+        )
+    )
+
+
+def _asr_cache_hit(run: _Run, report: dict[str, object], *, hotwords: Sequence[str]) -> bool:
+    """ASR 缓存判据：换视频 / 改源语言 / 改热词 / 改 initial prompt / 换模型都要重跑。
+
+    模型那一项单独由 ``_asr_model_matches`` 判（要兼顾"没显式指定时的默认模型归属"）。
+    """
+
+    options = run.options
+    asr_dir = run.out_dir / "asr"
+    return (
+        run.cached(asr_dir / "asr.json", asr_dir / "source.srt")
+        and _asr_model_matches(report, options)
+        and _config_matches(
+            report,
+            {
+                "input": {"sha256": run.source_sha256()},
+                "config": {
+                    "language": options.src_lang,
+                    "hotwords": list(hotwords),
+                    "initial_prompt": options.initial_prompt,
+                },
+            },
+        )
+    )
+
+
+def _speaker_by_cue(speakers_path: Path | None, srt: Path) -> tuple[str, ...]:
+    """``speakers.json`` → 原始字幕每条 cue 的说话人。
+
+    返回的元组长度必须和字幕条数对齐：合并阶段靠这个下标把"哪句话是谁说的"带到新的
+    时间轴上。读不出来就返回空元组（退回单音色，不让整条链路因此失败）。
+    """
+
+    if speakers_path is None:
+        return ()
+    assignments = _read_json(Path(speakers_path))
+    by_cue = {
+        int(item["cue"]): str(item.get("speaker") or "")
+        for item in assignments.get("cues") or []
+        if isinstance(item, dict) and "cue" in item
+    }
+    try:
+        source_cues = load_srt(srt)[0]
+    except (OSError, ValueError):
+        return ()
+    return tuple(by_cue.get(index, "") for index in range(1, len(source_cues.cues) + 1))
+
+
+def _merge_cache_hit(
+    run: _Run, track: _Track, report: dict[str, object], *, speaker_aware: bool
+) -> bool:
+    """merge 缓存判据：上游字幕 sha + 合并窗口 + 说话人归属文件。
+
+    ``speaker_aware`` 翻转时两侧都不能复用：断句依据从"只看时间"变成"按人分开"，
+    合并结果天然不是同一份。
+    """
+
+    options = run.options
+    merge_dir = run.out_dir / "merge"
+    if not (
+        run.cached(merge_dir / "merge.json", merge_dir / "merged.srt")
+        and _report_sha_matches(report, track.working_srt, "input", "sha256")
+        # 合并窗口变了，合并结果就不是同一份字幕
+        and _config_matches(
+            report,
+            {
+                "config": {
+                    "max_duration_ms": round(options.merge_max_duration * 1000),
+                    "max_gap_ms": round(options.merge_max_gap * 1000),
+                }
+            },
+        )
+    ):
+        return False
+    if speaker_aware:
+        return _report_sha_matches(
+            report, run.out_dir / "diarize" / "speakers.json", "input", "speakers", "sha256"
+        )
+    return not (report.get("input") or {}).get("speakers")
+
+
+def _translate_cache_hit(
+    run: _Run,
+    track: _Track,
+    report: dict[str, object],
+    *,
+    translated_srt: Path,
+    provider: str,
+) -> bool:
+    """translate 缓存判据：上游字幕 sha + 所有会改变译文的参数（见
+    ``_translate_config_matches``）。"""
+
+    return (
+        run.cached(translated_srt.parent / "translate.json", translated_srt)
+        and _report_sha_matches(report, track.working_srt, "input", "sha256")
+        and _translate_config_matches(
+            report, run.options, src_lang=track.src_lang, provider=provider
+        )
+    )
+
+
+def _build_cache_hit(
+    run: _Run,
+    track: _Track,
+    report: dict[str, object],
+    *,
+    publish_srt: Path,
+    limits: Limits,
+) -> bool:
+    """build 缓存判据：两条字幕的 sha + 语向阈值 + 排版开关（都会改折行/切条）。"""
+
+    options = run.options
+    return (
+        run.cached(publish_srt.parent / "report.json", publish_srt)
+        and _report_sha_matches(report, track.working_srt, "inputs", "source", "sha256")
+        and _report_sha_matches(report, track.translated_srt, "inputs", "target", "sha256")
+        and _config_matches(
+            report,
+            {
+                "config": {
+                    "src_lang": track.src_lang,
+                    "tgt_lang": options.tgt_lang,
+                    "cps_src": limits.cps_src,
+                    "cps_tgt": limits.cps_tgt,
+                    "width_src": limits.width_src,
+                    "width_tgt": limits.width_tgt,
+                    "max_lines": limits.max_lines,
+                    "layout": bool(options.wrap),
+                }
+            },
+        )
+    )
+
+
+def _dub_cache_hit(
+    run: _Run, track: _Track, report: dict[str, object], *, voice: str, rate: str | None
+) -> bool:
+    """dub 缓存判据：字幕 sha + 音色/语速/TTS 引擎 + 说话人 + BGM + 上次是否成功。
+
+    任何一项漏掉的表现都是"改了参数却拿到旧配音"——听感上完全看不出来，
+    用户只会觉得"怎么设了没生效"。
+    """
+
+    options = run.options
+    dub_dir = run.out_dir / "dub"
+    return (
+        run.cached(dub_dir / "dub_report.json", dub_dir / "dubbed.mp4")
+        # --regenerate-tts 明确要求重新合成，不能拿旧配音当缓存（云端 TTS 会重新计费）
+        and not options.regenerate_tts
+        and _report_sha_matches(report, track.translated_srt, "input", "srt", "sha256")
+        and _speakers_cache_matches(report, track.speakers_path)
+        and _dub_tts_cache_matches(
+            report,
+            voice=voice or "",
+            rate=rate,
+            voice_map=track.speaker_voice_map,
+            tts_command=options.tts_command,
+            tempo_limit=options.tempo_limit,
+            # 报告里记的是"实际生效"值（外部命令引擎不支持提语速），比较时也要用生效值
+            adaptive_rate=options.adaptive_rate and not options.tts_command,
+            tts_provider="command" if options.tts_command else options.tts_provider,
+            tts_fallback=options.tts_fallback
+            if options.tts_provider == "edge" and not options.tts_command
+            else "off",
+            local_fingerprint=_local_tts_fingerprint(options),
+        )
+        # BGM：开没开、用什么模式、从哪条音轨取，都改产物；只看字幕 sha 会导致
+        # "勾了保留 BGM 但成片没变"这种静默失效。（增益/闪避 pipeline 不暴露，
+        # 恒为 DubOptions 默认值，故不进判据。）
+        and _config_matches(
+            report,
+            {
+                "config": {
+                    "bgm": {
+                        "enabled": bool(options.keep_bgm),
+                        "mode": options.bgm_mode if options.keep_bgm else None,
+                        "source": str(Path(options.bgm_source or run.source).resolve())
+                        if options.keep_bgm
+                        else None,
+                    }
+                }
+            },
+            tolerance=0.01,
+        )
+        # 上次 partial（例如 TTS 解释器没装 edge-tts、云端临时失败）不能算缓存，
+        # 否则用户重跑永远拿不到配音，只能手动删目录；旧报告没有 status 字段时按 ok 处理
+        and str(report.get("status") or "ok") == "ok"
+    )
+
+
+def _burn_cache_hit(
+    run: _Run, track: _Track, report: dict[str, object], *, subtitle: Path
+) -> bool:
+    """burn 缓存判据：配音成片与要烧的字幕都不能变，码率/位置也改产物。"""
+
+    burn_dir = run.out_dir / "burn"
+    return (
+        run.cached(burn_dir / "burn.json", burn_dir / "burned.mp4")
+        and _report_sha_matches(report, track.dubbed_video, "input", "video", "sha256")
+        and _report_sha_matches(report, subtitle, "input", "subtitle", "sha256")
+        and _config_matches(
+            report,
+            {"config": {"crf": run.options.burn_crf, "position": run.options.burn_position}},
+        )
+    )
+
+
+def _mark_cache_hit(run: _Run, report: dict[str, object], *, src: Path) -> bool:
+    """mark 缓存判据：标识打在哪个视频上，看输入 sha 就够（这一步没有别的参数）。"""
+
+    final_dir = run.out_dir / "final"
+    return run.cached(final_dir / "mark.json", final_dir / "marked.mp4") and _report_sha_matches(
+        report, src, "input", "sha256"
+    )
+
+
+# ----------------------------------------------------------------------------
+# 各阶段：判缓存 → 跑生产函数 → 写阶段条目。返回 False 表示已失败并记过账，
+# 主循环随即停下交给 `run.finish()`。
+# ----------------------------------------------------------------------------
+
+
+def _stage_probe(run: _Run, track: _Track) -> bool:
+    """1. probe —— 判字幕路线：内封文本直出 / 图形字幕报错 / 无字幕交给 ASR。"""
+
+    probe_dir = run.out_dir / "probe"
+    src_lang = _probe_src_lang(run.options)
     stage_start = time.monotonic()
     try:
-        probe_manifest = (
-            _read_json(probe_dir / "manifest.json")
-            if cached(probe_dir / "manifest.json")
-            else {}
-        )
-        # 判据必须绑到"这个视频 + 这个源语言"：只看 manifest.json 是否存在时，
-        # 换一个视频复用同一个 --out 会直接输出上一条视频的字幕（真实翻车）。
-        if probe_manifest and _config_matches(
-            probe_manifest,
-            {"input": {"sha256": source_sha256()}, "src_lang": probe_src_lang},
-        ):
-            probe_status = str(probe_manifest.get("status") or "")
-            if probe_status == "extracted" and (probe_dir / "source.srt").is_file():
-                subtitle_path = probe_dir / "source.srt"
-            record("probe", "cached", summary={"status": probe_status})
+        manifest = _read_json(probe_dir / "manifest.json")
+        if _probe_cache_hit(run, manifest):
+            track.probe_status = str(manifest.get("status") or "")
+            if track.probe_status == "extracted" and (probe_dir / "source.srt").is_file():
+                track.subtitle_path = probe_dir / "source.srt"
+            run.record("probe", "cached", summary={"status": track.probe_status})
         else:
-            probe = run_probe(
-                ProbeOptions(src=source, out=probe_dir, src_lang=probe_src_lang)
-            )
-            probe_status = probe.status
-            subtitle_path = probe.subtitle_path
-            warnings.extend(str(item) for item in probe.manifest.get("warnings") or [])
-            record(
+            probe = run_probe(ProbeOptions(src=run.source, out=probe_dir, src_lang=src_lang))
+            track.probe_status = probe.status
+            track.subtitle_path = probe.subtitle_path
+            run.carry_warnings(probe.manifest)
+            run.record(
                 "probe",
                 "ok",
                 wall=time.monotonic() - stage_start,
-                artifacts=[probe.manifest_path] + ([subtitle_path] if subtitle_path else []),
-                summary={"status": probe_status, "cues": probe.cues},
+                artifacts=[probe.manifest_path]
+                + ([track.subtitle_path] if track.subtitle_path else []),
+                summary={"status": track.probe_status, "cues": probe.cues},
             )
-        if probe_status == "unsupported":
+        if track.probe_status == "unsupported":
             raise PipelineError(
                 "输入只有图形字幕轨（PGS/VobSub），本工具不做硬字幕 OCR，无法继续"
             )
     except (ProbeError, PipelineError, OSError) as exc:
-        fail("probe", exc)
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
-    if should_stop("probe"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+        return run.fail("probe", exc)
+    return True
 
-    # ------------------------------------------------------------------ 2. asr
-    asr_dir = out_dir / "asr"
-    if probe_status == "extracted":
-        if subtitle_path is None:
-            subtitle_path = probe_dir / "source.srt"
+
+def _stage_asr(run: _Run, track: _Track) -> bool:
+    """2. asr —— 没字幕就识别；``auto`` 语言在这里解析成具体语言。"""
+
+    options = run.options
+    asr_dir = run.out_dir / "asr"
+    if track.probe_status == "extracted":
+        if track.subtitle_path is None:
+            track.subtitle_path = run.out_dir / "probe" / "source.srt"
+        # 内封字幕是人工断句，没有"识别出语言"这一步——拿不到语言就没法定翻译方向
         if options.src_lang == "auto":
-            status = "failed"
-            record(
+            run.status = "failed"
+            run.record(
                 "asr",
                 "failed",
                 error="内封字幕路线需要显式 --src-lang（字幕流无法可靠判断语言）",
             )
-            return _finish(
-                options, out_dir, started_at, started, status, stages, outputs, warnings, source
-            )
-        record("asr", "skipped", summary={"reason": "内封字幕直出，无需 ASR"})
-        outputs["source_srt"] = str(subtitle_path.resolve())
-    else:
-        stage_start = time.monotonic()
-        # 热词与术语表原文既影响 ASR 结果，也必须进缓存判据——所以先算好一份，两处共用
-        hotwords = list(options.hotwords)
-        if options.glossary:
-            hotwords.extend(options.glossary.sources)
-        asr_hotwords = list(dict.fromkeys(hotwords))
-        try:
-            asr_report = _read_json(asr_dir / "asr.json")
-            if (
-                cached(asr_dir / "asr.json", asr_dir / "source.srt")
-                and _asr_model_matches(asr_report, options)
-                # 换视频 / 改源语言 / 改热词 / 改 initial prompt 都必须重跑 ASR
-                and _config_matches(
-                    asr_report,
-                    {
-                        "input": {"sha256": source_sha256()},
-                        "config": {
-                            "language": options.src_lang,
-                            "hotwords": asr_hotwords,
-                            "initial_prompt": options.initial_prompt,
-                        },
-                    },
-                )
-            ):
-                summary = asr_report.get("summary") or {}
-                detected = str(summary.get("language") or "")  # type: ignore[union-attr]
-                if options.src_lang == "auto":
-                    resolved_src_lang = _map_language(detected)
-                subtitle_path = asr_dir / "source.srt"
-                # 报告里的 cue 数是 ASR 当时的；字幕被人工校对（并过）之后以文件为准
-                current_cues = summary.get("cues")  # type: ignore[union-attr]
-                try:
-                    current_cues = len(load_srt(subtitle_path)[0])
-                except (OSError, ValueError):
-                    pass
-                record(
-                    "asr",
-                    "cached",
-                    artifacts=[asr_dir / "asr.json", subtitle_path],
-                    summary={"language": detected, "cues": current_cues},
-                )
-            else:
-                # OPT-5：分段只跟音频和聚类参数有关，与 ASR 无关——趁 ASR 在跑先算掉。
-                # `auto` 源语言此时还没解析出具体语言（要等 ASR 报告），无法选声纹模型，故不预取。
-                if _needs_diarize(options) and options.src_lang != "auto":
-                    diarize_prefetch = _start_diarize_segments(
-                        options, source, out_dir / "diarize", options.src_lang
-                    )
-                asr = run_asr(
-                    AsrOptions(
-                        src=source,
-                        out=asr_dir,
-                        language=options.src_lang if options.src_lang != "auto" else "auto",
-                        model=options.asr_model,
-                        python=options.asr_python,
-                        hotwords=tuple(asr_hotwords),
-                        initial_prompt=options.initial_prompt,
-                    )
-                )
-                subtitle_path = asr.srt_path
-                summary = asr.report.get("summary") or {}
-                config = asr.report.get("config") or {}
-                detected = str(summary.get("language") or "")  # type: ignore[union-attr]
-                if options.src_lang == "auto":
-                    resolved_src_lang = _map_language(detected)
-                warnings.extend(str(item) for item in asr.report.get("warnings") or [])
-                record(
-                    "asr",
-                    "ok",
-                    wall=time.monotonic() - stage_start,
-                    artifacts=[item for item in (asr.srt_path, asr.words_path, asr.report_path) if item],
-                    summary={
-                        "language": detected,
-                        "cues": summary.get("cues"),  # type: ignore[union-attr]
-                        "words": summary.get("words"),  # type: ignore[union-attr]
-                        "model": config.get("model_variant"),  # type: ignore[union-attr]
-                        "rtf": summary.get("rtf"),  # type: ignore[union-attr]
-                    },
-                )
-            if subtitle_path is None or not Path(subtitle_path).is_file():
-                raise PipelineError("ASR 没有产出字幕文件")
-            outputs["source_srt"] = str(Path(subtitle_path).resolve())
-        except (AsrError, PipelineError, OSError) as exc:
-            fail("asr", exc)
-            return _finish(
-                options, out_dir, started_at, started, status, stages, outputs, warnings, source
-            )
-    if should_stop("asr"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+            return False
+        run.record("asr", "skipped", summary={"reason": "内封字幕直出，无需 ASR"})
+        run.outputs["source_srt"] = str(track.subtitle_path.resolve())
+        return True
 
-    # ------------------------------------------------------------------ 3. diarize（多人声）
-    # **顺序很关键**：先分离说话人，再合并句子。合并只看时间的话会把两个人的台词
-    # 并成一条字幕，之后无论怎么分派音色都只能一个人读（对话素材一开始就是这样翻车的）。
-    # 默认关闭——单人口播不需要多花这份时间，行为与 M10 完全一致；
-    # 给了 --speaker-voices / --speakers 才开启。
-    # OPT-5：若前面 ASR 正在跑，分段结果（diarize 的重活）已经在后台并行算完了，
-    # 这里只补"字幕条 → 说话人"的归属（毫秒级），省掉 min(ASR, diarize) 的墙钟。
-    working_srt = Path(subtitle_path)
-    diarize_dir = out_dir / "diarize"
-    speakers_path: Path | None = None
-    speaker_voice_map: dict[str, str] = {}
     stage_start = time.monotonic()
+    # 热词与术语表原文既影响 ASR 结果，也必须进缓存判据——所以先算好一份，两处共用
+    hotwords = list(options.hotwords)
+    if options.glossary:
+        hotwords.extend(options.glossary.sources)
+    asr_hotwords = list(dict.fromkeys(hotwords))
+    try:
+        report = _read_json(asr_dir / "asr.json")
+        if _asr_cache_hit(run, report, hotwords=asr_hotwords):
+            summary = report.get("summary") or {}
+            detected = str(summary.get("language") or "")  # type: ignore[union-attr]
+            if options.src_lang == "auto":
+                track.src_lang = _map_language(detected)
+            track.subtitle_path = asr_dir / "source.srt"
+            # 报告里的 cue 数是 ASR 当时的；字幕被人工校对（并过）之后以文件为准
+            current_cues = summary.get("cues")  # type: ignore[union-attr]
+            try:
+                current_cues = len(load_srt(track.subtitle_path)[0])
+            except (OSError, ValueError):
+                pass
+            run.record(
+                "asr",
+                "cached",
+                artifacts=[asr_dir / "asr.json", track.subtitle_path],
+                summary={"language": detected, "cues": current_cues},
+            )
+        else:
+            # OPT-5：分段只跟音频和聚类参数有关，与 ASR 无关——趁 ASR 在跑先算掉。
+            # `auto` 源语言此时还没解析出具体语言（要等 ASR 报告），无法选声纹模型，故不预取。
+            if _needs_diarize(options) and options.src_lang != "auto":
+                track.diarize_prefetch = _start_diarize_segments(
+                    options, run.source, run.out_dir / "diarize", options.src_lang
+                )
+            asr = run_asr(
+                AsrOptions(
+                    src=run.source,
+                    out=asr_dir,
+                    language=options.src_lang,
+                    model=options.asr_model,
+                    python=options.asr_python,
+                    hotwords=tuple(asr_hotwords),
+                    initial_prompt=options.initial_prompt,
+                )
+            )
+            track.subtitle_path = asr.srt_path
+            summary = asr.report.get("summary") or {}
+            config = asr.report.get("config") or {}
+            detected = str(summary.get("language") or "")  # type: ignore[union-attr]
+            if options.src_lang == "auto":
+                track.src_lang = _map_language(detected)
+            run.carry_warnings(asr.report)
+            run.record(
+                "asr",
+                "ok",
+                wall=time.monotonic() - stage_start,
+                artifacts=[
+                    item for item in (asr.srt_path, asr.words_path, asr.report_path) if item
+                ],
+                summary={
+                    "language": detected,
+                    "cues": summary.get("cues"),  # type: ignore[union-attr]
+                    "words": summary.get("words"),  # type: ignore[union-attr]
+                    "model": config.get("model_variant"),  # type: ignore[union-attr]
+                    "rtf": summary.get("rtf"),  # type: ignore[union-attr]
+                },
+            )
+        if track.subtitle_path is None or not Path(track.subtitle_path).is_file():
+            raise PipelineError("ASR 没有产出字幕文件")
+        run.outputs["source_srt"] = str(Path(track.subtitle_path).resolve())
+    except (AsrError, PipelineError, OSError) as exc:
+        return run.fail("asr", exc)
+    return True
+
+
+def _stage_diarize(run: _Run, track: _Track) -> bool:
+    """3. diarize —— 说话人分离（默认关闭；`--diarize` / `--speaker-voices` / `--speakers` 开启）。
+
+    **顺序很关键**：先分离说话人，再合并句子。合并只看时间的话会把两个人的台词并成
+    一条字幕，之后无论怎么分派音色都只能一个人读（对话素材一开始就是这样翻车的）。
+
+    分离失败**不中断**整条链路：记 partial + 告警，退回单音色配音，成片仍然可用。
+    """
+
+    options = run.options
+    # 从这里开始下游一律读 working_srt（merge 合并、clean 过滤都会换成新文件）
+    track.working_srt = track.subtitle_path
     if not _needs_diarize(options):
-        record("diarize", "skipped", summary={"reason": "未启用多人声（默认单音色）"})
-    else:
-        try:
-            diarize_report_path = diarize_dir / "diarize.json"
-            diarize_report = _read_json(diarize_report_path)
-            prefetched_turns: list[SpeakerTurn] | None = None
-            prefetched_report: dict[str, object] | None = None
-            if diarize_prefetch is not None:
-                if isinstance(diarize_prefetch, _BackgroundJob):
-                    outcome = diarize_prefetch.result()
-                    # 不要求严格是 DiarizeResult：凡是带 segments/report 的结果都接（便于测试注入）
-                    segments = getattr(outcome, "segments", None)
-                    if segments is not None:
-                        prefetched_turns = list(segments)
-                        prefetched_report = dict(getattr(outcome, "report", {}) or {})
-                else:
-                    prefetched_turns, prefetched_report = diarize_prefetch
+        run.record("diarize", "skipped", summary={"reason": "未启用多人声（默认单音色）"})
+        return True
+
+    diarize_dir = run.out_dir / "diarize"
+    stage_start = time.monotonic()
+    try:
+        diarize_report_path = diarize_dir / "diarize.json"
+        diarize_report = _read_json(diarize_report_path)
+        prefetched_turns: list[SpeakerTurn] | None = None
+        prefetched_report: dict[str, object] | None = None
+        prefetch = track.diarize_prefetch
+        if isinstance(prefetch, _BackgroundJob):
+            outcome = prefetch.result()
+            # 不要求严格是 DiarizeResult：凡是带 segments/report 的结果都接（便于测试注入）
+            segments = getattr(outcome, "segments", None)
+            if segments is not None:
+                prefetched_turns = list(segments)
+                prefetched_report = dict(getattr(outcome, "report", {}) or {})
+        elif prefetch is not None:
+            prefetched_turns, prefetched_report = prefetch
+        if (
+            prefetched_turns is None
+            and run.cached(diarize_report_path, diarize_dir / "speakers.json")
+            and _report_sha_matches(diarize_report, track.working_srt, "input", "srt", "sha256")
+            and _report_sha_matches(diarize_report, run.source, "input", "sha256")
+            and _diarize_config_matches(diarize_report, options, track.src_lang)
+        ):
+            track.speakers_path = diarize_dir / "speakers.json"
+            run.record(
+                "diarize",
+                "cached",
+                artifacts=[diarize_report_path, track.speakers_path],
+                summary=_diarize_summary(diarize_report),
+            )
+            run.carry_warnings(diarize_report)
+        elif prefetch is not None:
+            # 分段已就绪（并行算完或从 segments.json 复用）→ 只补归属
+            if prefetched_turns is None:
+                raise DiarizeError("说话人分段没有产出结果")
+            speakers_file, attached_report = attach_speakers(
+                prefetched_turns,
+                track.working_srt,
+                diarize_dir,
+                report=prefetched_report,
+            )
+            track.speakers_path = speakers_file
+            run.carry_warnings(attached_report)
+            run.record(
+                "diarize",
+                "ok" if attached_report.get("status") == "ok" else "partial",
+                wall=time.monotonic() - stage_start,
+                artifacts=[
+                    diarize_dir / "diarize.json",
+                    diarize_dir / SEGMENTS_NAME,
+                    speakers_file,
+                ],
+                summary={**_diarize_summary(attached_report), "parallel_with_asr": True},
+            )
+        else:
+            # OPT-5：分段已存在（源文件/聚类参数没变）→ 只补归属，不再跑分离模型
+            cached_turns, cached_payload = load_segments(diarize_dir / SEGMENTS_NAME)
             if (
-                prefetched_turns is None
-                and cached(diarize_report_path, diarize_dir / "speakers.json")
-                and _report_sha_matches(diarize_report, working_srt, "input", "srt", "sha256")
-                and _report_sha_matches(diarize_report, source, "input", "sha256")
-                and _diarize_config_matches(diarize_report, options, resolved_src_lang)
+                cached_turns
+                and not options.force
+                and _segments_matches(cached_payload, options, run.source, track.src_lang)
             ):
-                speakers_path = diarize_dir / "speakers.json"
-                record(
-                    "diarize",
-                    "cached",
-                    artifacts=[diarize_report_path, speakers_path],
-                    summary=_diarize_summary(diarize_report),
-                )
-                warnings.extend(str(item) for item in diarize_report.get("warnings") or [])
-            elif diarize_prefetch is not None:
-                # 分段已就绪（并行算完或从 segments.json 复用）→ 只补归属
-                if prefetched_turns is None:
-                    raise DiarizeError("说话人分段没有产出结果")
                 speakers_file, attached_report = attach_speakers(
-                    prefetched_turns,
-                    working_srt,
+                    cached_turns,
+                    track.working_srt,
                     diarize_dir,
-                    report=prefetched_report,
+                    report=_segments_base_report(cached_payload),
                 )
-                speakers_path = speakers_file
-                warnings.extend(str(item) for item in attached_report.get("warnings") or [])
-                record(
+                track.speakers_path = speakers_file
+                run.carry_warnings(attached_report)
+                run.record(
                     "diarize",
                     "ok" if attached_report.get("status") == "ok" else "partial",
                     wall=time.monotonic() - stage_start,
@@ -726,272 +1193,234 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
                         diarize_dir / SEGMENTS_NAME,
                         speakers_file,
                     ],
-                    summary={**_diarize_summary(attached_report), "parallel_with_asr": True},
+                    summary={**_diarize_summary(attached_report), "reused_segments": True},
                 )
             else:
-                # OPT-5：分段已存在（源文件/聚类参数没变）→ 只补归属，不再跑分离模型
-                cached_turns, cached_payload = load_segments(diarize_dir / SEGMENTS_NAME)
-                if (
-                    cached_turns
-                    and not options.force
-                    and _segments_matches(cached_payload, options, source, resolved_src_lang)
-                ):
-                    speakers_file, attached_report = attach_speakers(
-                        cached_turns,
-                        working_srt,
-                        diarize_dir,
-                        report=_segments_base_report(cached_payload),
+                diarization = run_diarize(
+                    DiarizeOptions(
+                        src=run.source,
+                        out=diarize_dir,
+                        srt=track.working_srt,
+                        language=track.src_lang,
+                        python=options.diarize_python,
+                        segmentation_model=options.segmentation_model,
+                        embedding_model=options.embedding_model,
+                        vad=options.vad,
+                        vad_model=options.vad_model,
+                        vad_threshold=options.vad_threshold,
+                        clustering=options.clustering,
+                        merge_alpha=options.merge_alpha,
+                        num_speakers=options.speakers,
+                        threshold=options.diarization_threshold,
+                        min_speaker_speech_s=0.0
+                        if options.keep_minor_speakers
+                        else MIN_SPEAKER_SPEECH_S,
+                        min_speaker_share=0.0 if options.keep_minor_speakers else 0.01,
                     )
-                    speakers_path = speakers_file
-                    warnings.extend(
-                        str(item) for item in attached_report.get("warnings") or []
-                    )
-                    record(
-                        "diarize",
-                        "ok" if attached_report.get("status") == "ok" else "partial",
-                        wall=time.monotonic() - stage_start,
-                        artifacts=[
-                            diarize_dir / "diarize.json",
-                            diarize_dir / SEGMENTS_NAME,
-                            speakers_file,
-                        ],
-                        summary={**_diarize_summary(attached_report), "reused_segments": True},
-                    )
-                else:
-                    diarization = run_diarize(
-                        DiarizeOptions(
-                            src=source,
-                            out=diarize_dir,
-                            srt=working_srt,
-                            language=resolved_src_lang,
-                            python=options.diarize_python,
-                            segmentation_model=options.segmentation_model,
-                            embedding_model=options.embedding_model,
-                            vad=options.vad,
-                            vad_model=options.vad_model,
-                            vad_threshold=options.vad_threshold,
-                            clustering=options.clustering,
-                            merge_alpha=options.merge_alpha,
-                            num_speakers=options.speakers,
-                            threshold=options.diarization_threshold,
-                            min_speaker_speech_s=0.0 if options.keep_minor_speakers else MIN_SPEAKER_SPEECH_S,
-                            min_speaker_share=0.0 if options.keep_minor_speakers else 0.01,
-                        )
-                    )
-                    speakers_path = diarization.speakers_path
-                    warnings.extend(str(item) for item in diarization.report.get("warnings") or [])
-                    record(
-                        "diarize",
-                        "ok" if diarization.status == "ok" else "partial",
-                        wall=time.monotonic() - stage_start,
-                        artifacts=[diarization.report_path]
-                        + ([diarization.speakers_path] if diarization.speakers_path else []),
-                        summary=_diarize_summary(diarization.report),
-                    )
-            if speakers_path is not None:
-                outputs["speakers_json"] = str(speakers_path.resolve())
-                assignments = _read_json(speakers_path)
-                speakers = [str(item) for item in assignments.get("speakers") or []]
-                explicit, pool = parse_speaker_voices(options.speaker_voices)
-                if not explicit and not pool:
-                    pool = DEFAULT_SPEAKER_VOICES.get(options.tgt_lang, ())
-                default_voice = (
-                    options.voice or DEFAULT_VOICES.get(options.tgt_lang) or "en-US-AriaNeural"
                 )
-                if len(speakers) >= 2:
-                    speaker_voice_map = build_speaker_voice_map(
-                        speakers, explicit=explicit, pool=pool, default=default_voice
-                    )
-                    if stages and stages[-1].get("stage") == "diarize":
-                        summary = stages[-1].setdefault("summary", {})
-                        if isinstance(summary, dict):
-                            summary["speaker_voices"] = dict(sorted(speaker_voice_map.items()))
-                    if not explicit and pool and len(speakers) > len(pool):
-                        warnings.append(
-                            f"检测到 {len(speakers)} 个说话人，但只配置了 {len(pool)} 个音色，"
-                            "多出来的说话人会复用前面的音色"
-                        )
-                else:
-                    speakers_path = None
-                    warnings.append("只识别到 1 个说话人，已退回单音色配音")
-        except (DiarizeError, OSError) as exc:
-            # 分离失败 → 诚实告警 + 退回单音色，不让整条链路白跑（成片仍然可用）
-            status = "partial"
-            record("diarize", "failed", error=str(exc))
-            warnings.append(f"说话人分离失败，已退回单音色配音：{exc}")
-            speakers_path = None
-            speaker_voice_map = {}
-    if should_stop("diarize"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
-
-    # ------------------------------------------------------------------ 4. merge
-    # ASR 按停顿切段，天然产出"半句碎片"（"为了生存，它们展开" / "一场盐的争夺战。"）。
-    # 先并成句子级 cue 再翻译，否则英文译文会继承断句（"To survive, they wage." /
-    # "a battle for salt."），句子读不通、配音槽位也被切碎。
-    # 多人声时合并必须**按说话人分段**：不同人的相邻台词不能并成一条。
-    merge_dir = out_dir / "merge"
-    merged_srt = merge_dir / "merged.srt"
-    diarize_speakers_file = diarize_dir / "speakers.json"
-    cue_speakers: tuple[str, ...] = ()
-    if speakers_path is not None:
-        assignments = _read_json(Path(speakers_path))
-        by_cue = {
-            int(item["cue"]): str(item.get("speaker") or "")
-            for item in assignments.get("cues") or []
-            if isinstance(item, dict) and "cue" in item
-        }
-        try:
-            source_cues = load_srt(working_srt)[0]
-            cue_speakers = tuple(
-                by_cue.get(index, "") for index in range(1, len(source_cues.cues) + 1)
-            )
-        except (OSError, ValueError):
-            cue_speakers = ()
-    speaker_aware = len({speaker for speaker in cue_speakers if speaker}) >= 2
-
-    if probe_status == "extracted":
-        record("merge", "skipped", summary={"reason": "内封字幕是人工断句，跳过合并"})
-    elif not options.merge:
-        record("merge", "skipped", summary={"reason": "已用 --no-merge 关闭合并"})
-    else:
-        stage_start = time.monotonic()
-        try:
-            merge_report = _read_json(merge_dir / "merge.json")
-            merge_cached = (
-                cached(merge_dir / "merge.json", merged_srt)
-                and _report_sha_matches(merge_report, working_srt, "input", "sha256")
-                # 合并窗口变了，合并结果就不是同一份字幕
-                and _config_matches(
-                    merge_report,
-                    {
-                        "config": {
-                            "max_duration_ms": round(options.merge_max_duration * 1000),
-                            "max_gap_ms": round(options.merge_max_gap * 1000),
-                        }
-                    },
-                )
-            )
-            if merge_cached and speaker_aware:
-                merge_cached = _report_sha_matches(
-                    merge_report, diarize_speakers_file, "input", "speakers", "sha256"
-                )
-            elif merge_cached:
-                merge_cached = not (merge_report.get("input") or {}).get("speakers")
-            if merge_cached:
-                working_srt = merged_srt
-                record(
-                    "merge",
-                    "cached",
-                    artifacts=[merge_dir / "merge.json", merged_srt],
-                    summary=_merge_summary(merge_report),
-                )
-            else:
-                merged = run_merge(
-                    working_srt,
-                    merge_dir,
-                    MergeOptions(
-                        max_duration_ms=round(options.merge_max_duration * 1000),
-                        max_gap_ms=round(options.merge_max_gap * 1000),
-                        speakers=cue_speakers if speaker_aware else (),
-                        speakers_path=diarize_speakers_file if speaker_aware else None,
-                    ),
-                )
-                working_srt = merged.merged_path
-                record(
-                    "merge",
-                    "ok",
+                track.speakers_path = diarization.speakers_path
+                run.carry_warnings(diarization.report)
+                run.record(
+                    "diarize",
+                    "ok" if diarization.status == "ok" else "partial",
                     wall=time.monotonic() - stage_start,
-                    artifacts=[merged.report_path, merged.merged_path],
-                    summary=_merge_summary(merged.report),
+                    artifacts=[diarization.report_path]
+                    + ([diarization.speakers_path] if diarization.speakers_path else []),
+                    summary=_diarize_summary(diarization.report),
                 )
-            outputs["merged_srt"] = str(working_srt.resolve())
-        except (MergeError, OSError) as exc:
-            fail("merge", exc)
-            return _finish(
-                options, out_dir, started_at, started, status, stages, outputs, warnings, source
+        if track.speakers_path is not None:
+            run.outputs["speakers_json"] = str(track.speakers_path.resolve())
+            assignments = _read_json(track.speakers_path)
+            speakers = [str(item) for item in assignments.get("speakers") or []]
+            explicit, pool = parse_speaker_voices(options.speaker_voices)
+            if not explicit and not pool:
+                pool = DEFAULT_SPEAKER_VOICES.get(options.tgt_lang, ())
+            default_voice = (
+                options.voice or DEFAULT_VOICES.get(options.tgt_lang) or "en-US-AriaNeural"
             )
-    if should_stop("merge"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
-
-    # 合并会改变 cue 的条数/时间轴，说话人映射要跟着搬到合并后的字幕上（配音按条选音色）
-    if speakers_path is not None and cue_speakers and working_srt != Path(subtitle_path):
-        try:
-            remapped = _remap_speaker_assignments(
-                Path(subtitle_path),
-                working_srt,
-                cue_speakers,
-                diarize_dir / "speakers.merged.json",
-            )
-            if remapped is not None:
-                speakers_path = remapped
-                outputs["speakers_json"] = str(remapped.resolve())
-        except (OSError, ValueError) as exc:
-            warnings.append(f"合并后说话人映射重建失败，已退回单音色配音：{exc}")
-            speakers_path = None
-            speaker_voice_map = {}
-
-    # ------------------------------------------------------------------ 5. translate
-    # ASR 会把片尾音乐/掌声/环境声听成重复音节（CCTV 实测「咪咪咪…」一条 200+ 字），
-    # 送到 LLM 会让模型跟着退化成 `Mi mi mi…`（不是 JSON）→ 整批翻译失败。
-    # 进入翻译前丢弃这类 cue；内封字幕是人工断句，不做这种猜测。
-    if probe_status != "extracted":
-        cleaned = cleanup_srt(working_srt, merge_dir / "clean.srt")
-        if cleaned.dropped:
-            working_srt = cleaned.srt_path
-            outputs["clean_srt"] = str(cleaned.srt_path.resolve())
-            warnings.append(
-                "已过滤 %d 条疑似音乐/噪声字幕（cue %s），不参与翻译与配音"
-                % (len(cleaned.dropped), "、".join(str(index) for index in cleaned.dropped))
-            )
-            if speakers_path is not None:
-                try:
-                    cleaned_speakers = cleanup_speakers(
-                        speakers_path, cleaned.dropped, merge_dir / "speakers.clean.json"
-                    )
-                except (OSError, ValueError):
-                    cleaned_speakers = None
-                if cleaned_speakers is not None:
-                    speakers_path = cleaned_speakers
-                    outputs["speakers_json"] = str(cleaned_speakers.resolve())
-            for entry in reversed(stages):
-                if entry.get("stage") == "merge":
+            if len(speakers) >= 2:
+                track.speaker_voice_map = build_speaker_voice_map(
+                    speakers, explicit=explicit, pool=pool, default=default_voice
+                )
+                entry = run.entry("diarize")
+                if entry is not None:
                     summary = entry.setdefault("summary", {})
                     if isinstance(summary, dict):
-                        summary["degenerate_dropped"] = len(cleaned.dropped)
-                    break
+                        summary["speaker_voices"] = dict(sorted(track.speaker_voice_map.items()))
+                if not explicit and pool and len(speakers) > len(pool):
+                    run.note(
+                        f"检测到 {len(speakers)} 个说话人，但只配置了 {len(pool)} 个音色，"
+                        "多出来的说话人会复用前面的音色"
+                    )
+            else:
+                track.speakers_path = None
+                run.note("只识别到 1 个说话人，已退回单音色配音")
+    except (DiarizeError, OSError) as exc:
+        # 分离失败 → 诚实告警 + 退回单音色，不让整条链路白跑（成片仍然可用）
+        run.status = "partial"
+        run.record("diarize", "failed", error=str(exc))
+        run.note(f"说话人分离失败，已退回单音色配音：{exc}")
+        track.speakers_path = None
+        track.speaker_voice_map = {}
+    return True
 
-    translate_dir = out_dir / "translate"
+
+def _stage_merge(run: _Run, track: _Track) -> bool:
+    """4. merge —— 把 ASR 的碎句并成句子级 cue（多人声时必须按说话人分段）。
+
+    ASR 按停顿切段，天然产出"半句碎片"（"为了生存，它们展开" / "一场盐的争夺战。"），
+    直接翻译会得到英文半句（"To survive, they wage." / "a battle for salt."），
+    句子读不通、配音槽位也被切碎。
+    """
+
+    options = run.options
+    merge_dir = run.out_dir / "merge"
+    merged_srt = merge_dir / "merged.srt"
+    track.cue_speakers = _speaker_by_cue(track.speakers_path, track.working_srt)
+    speaker_aware = len({speaker for speaker in track.cue_speakers if speaker}) >= 2
+
+    if track.probe_status == "extracted":
+        # 内封字幕是人工断句，合并只会破坏人家切好的句子
+        run.record("merge", "skipped", summary={"reason": "内封字幕是人工断句，跳过合并"})
+        return True
+    if not options.merge:
+        run.record("merge", "skipped", summary={"reason": "已用 --no-merge 关闭合并"})
+        return True
+
+    stage_start = time.monotonic()
+    try:
+        report = _read_json(merge_dir / "merge.json")
+        if _merge_cache_hit(run, track, report, speaker_aware=speaker_aware):
+            track.working_srt = merged_srt
+            run.record(
+                "merge",
+                "cached",
+                artifacts=[merge_dir / "merge.json", merged_srt],
+                summary=_merge_summary(report),
+            )
+        else:
+            merged = run_merge(
+                track.working_srt,
+                merge_dir,
+                MergeOptions(
+                    max_duration_ms=round(options.merge_max_duration * 1000),
+                    max_gap_ms=round(options.merge_max_gap * 1000),
+                    speakers=track.cue_speakers if speaker_aware else (),
+                    speakers_path=run.out_dir / "diarize" / "speakers.json"
+                    if speaker_aware
+                    else None,
+                ),
+            )
+            track.working_srt = merged.merged_path
+            run.record(
+                "merge",
+                "ok",
+                wall=time.monotonic() - stage_start,
+                artifacts=[merged.report_path, merged.merged_path],
+                summary=_merge_summary(merged.report),
+            )
+        run.outputs["merged_srt"] = str(track.working_srt.resolve())
+    except (MergeError, OSError) as exc:
+        return run.fail("merge", exc)
+    return True
+
+
+def _remap_speakers_after_merge(run: _Run, track: _Track) -> bool:
+    """合并会改变 cue 的条数/时间轴，说话人映射要跟着搬到合并后的字幕上（配音按条选音色）。"""
+
+    if track.speakers_path is None or not track.cue_speakers:
+        return True
+    if track.working_srt == track.subtitle_path:
+        return True
+    try:
+        remapped = _remap_speaker_assignments(
+            track.subtitle_path,
+            track.working_srt,
+            track.cue_speakers,
+            run.out_dir / "diarize" / "speakers.merged.json",
+        )
+    except (OSError, ValueError) as exc:
+        run.note(f"合并后说话人映射重建失败，已退回单音色配音：{exc}")
+        track.speakers_path = None
+        track.speaker_voice_map = {}
+        return True
+    if remapped is not None:
+        track.speakers_path = remapped
+        run.outputs["speakers_json"] = str(remapped.resolve())
+    return True
+
+
+def _clean_degenerate_cues(run: _Run, track: _Track) -> bool:
+    """翻译前的过滤：丢掉片尾音乐/掌声/环境声被听成的重复音节。
+
+    ASR 会把这类声音听成重复音节（CCTV 实测「咪咪咪…」一条 200+ 字），送到 LLM 会让
+    模型跟着退化成 ``Mi mi mi…``（不是 JSON）→ 整批翻译失败。内封字幕是人工断句，不做
+    这种猜测。这一步不单独占一个阶段，结论回填到 merge 的摘要上（``degenerate_dropped``）。
+    """
+
+    if track.probe_status == "extracted":
+        return True
+    merge_dir = run.out_dir / "merge"
+    cleaned = cleanup_srt(track.working_srt, merge_dir / "clean.srt")
+    if not cleaned.dropped:
+        return True
+    track.working_srt = cleaned.srt_path
+    run.outputs["clean_srt"] = str(cleaned.srt_path.resolve())
+    run.note(
+        "已过滤 %d 条疑似音乐/噪声字幕（cue %s），不参与翻译与配音"
+        % (len(cleaned.dropped), "、".join(str(index) for index in cleaned.dropped))
+    )
+    if track.speakers_path is not None:
+        try:
+            cleaned_speakers = cleanup_speakers(
+                track.speakers_path, cleaned.dropped, merge_dir / "speakers.clean.json"
+            )
+        except (OSError, ValueError):
+            cleaned_speakers = None
+        if cleaned_speakers is not None:
+            track.speakers_path = cleaned_speakers
+            run.outputs["speakers_json"] = str(cleaned_speakers.resolve())
+    entry = run.entry("merge")
+    if entry is not None:
+        summary = entry.setdefault("summary", {})
+        if isinstance(summary, dict):
+            summary["degenerate_dropped"] = len(cleaned.dropped)
+    return True
+
+
+def _stage_translate(run: _Run, track: _Track) -> bool:
+    """5. translate —— 逐条译成目标语言（可精简、可 LLM 复查）。"""
+
+    options = run.options
+    translate_dir = run.out_dir / "translate"
     translated_srt = translate_dir / f"{options.tgt_lang}.srt"
     stage_start = time.monotonic()
     try:
         provider = _resolve_provider(options)
-        translate_report = _read_json(translate_dir / "translate.json")
-        if (
-            cached(translate_dir / "translate.json", translated_srt)
-            and _report_sha_matches(translate_report, working_srt, "input", "sha256")
-            and _translate_config_matches(
-                translate_report, options, src_lang=resolved_src_lang, provider=provider
-            )
+        report = _read_json(translate_dir / "translate.json")
+        if _translate_cache_hit(
+            run, track, report, translated_srt=translated_srt, provider=provider
         ):
-            record(
+            run.record(
                 "translate",
                 "cached",
                 artifacts=[translate_dir / "translate.json", translated_srt],
-                summary=_translation_summary(translate_report),
+                summary=_translation_summary(report),
             )
-            warnings.extend(str(item) for item in translate_report.get("warnings") or [])
+            run.carry_warnings(report)
         else:
+            llm_config: LlmConfig | None = None
             if provider == "openai":
-                config = options.llm_config or LlmConfig.from_env()
-                if not config.configured:
+                llm_config = options.llm_config or LlmConfig.from_env()
+                if not llm_config.configured:
                     raise PipelineError(
                         "--llm 需要 LLM key：设置环境变量 DEEPSEEK_API_KEY（或 OPENAI_API_KEY）"
                     )
             translate = run_translate(
                 TranslateOptions(
-                    src=working_srt,
+                    src=track.working_srt,
                     out=translate_dir,
-                    src_lang=resolved_src_lang,
+                    src_lang=track.src_lang,
                     tgt_lang=options.tgt_lang,
                     provider=provider,
                     glossary=options.glossary,
@@ -1000,158 +1429,104 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
                     dub_cps_budget=_dub_capacity_cps(options),
                     fallback_provider=options.translate_fallback,
                     concurrency=options.translate_concurrency,
-                    llm=(options.llm_config or LlmConfig.from_env())
-                    if provider == "openai"
-                    else None,
+                    llm=llm_config,
                     llm_review=options.llm_review if provider == "openai" else False,
                 )
             )
-            translated_srt = translate.output_path or translated_srt
-            warnings.extend(str(item) for item in translate.report.get("warnings") or [])
-            record(
+            translated_srt = Path(translate.output_path or translated_srt)
+            run.carry_warnings(translate.report)
+            run.record(
                 "translate",
                 "ok",
                 wall=time.monotonic() - stage_start,
                 artifacts=[translate.report_path, translated_srt],
                 summary=_translation_summary(translate.report),
             )
-        outputs["translated_srt"] = str(translated_srt.resolve())
+        track.translated_srt = translated_srt
+        run.outputs["translated_srt"] = str(translated_srt.resolve())
     except (TranslateError, PipelineError, OSError) as exc:
-        fail("translate", exc)
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
-    if should_stop("translate"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+        return run.fail("translate", exc)
+    return True
 
-    # ------------------------------------------------------------------ 6. build
-    matrix_dir = out_dir / "matrix"
+
+def _stage_build(run: _Run, track: _Track) -> bool:
+    """6. build —— 排版出发布字幕（按宽度/CPS 折行切条），校验不过整条链路失败。"""
+
+    options = run.options
+    matrix_dir = run.out_dir / "matrix"
     publish_srt = matrix_dir / f"{options.tgt_lang}.srt"
     # 阈值由语向推出；排版开关会改折行/切条——两样都必须在报告里对得上才能复用
-    matrix_limits = Limits.from_languages(resolved_src_lang, options.tgt_lang)
+    limits = Limits.from_languages(track.src_lang, options.tgt_lang)
     stage_start = time.monotonic()
     try:
-        matrix_report = _read_json(matrix_dir / "report.json")
-        if (
-            cached(matrix_dir / "report.json", publish_srt)
-            and _report_sha_matches(matrix_report, working_srt, "inputs", "source", "sha256")
-            and _report_sha_matches(matrix_report, translated_srt, "inputs", "target", "sha256")
-            and _config_matches(
-                matrix_report,
-                {
-                    "config": {
-                        "src_lang": resolved_src_lang,
-                        "tgt_lang": options.tgt_lang,
-                        "cps_src": matrix_limits.cps_src,
-                        "cps_tgt": matrix_limits.cps_tgt,
-                        "width_src": matrix_limits.width_src,
-                        "width_tgt": matrix_limits.width_tgt,
-                        "max_lines": matrix_limits.max_lines,
-                        "layout": bool(options.wrap),
-                    }
-                },
-            )
-        ):
-            record(
+        report = _read_json(matrix_dir / "report.json")
+        if _build_cache_hit(run, track, report, publish_srt=publish_srt, limits=limits):
+            run.record(
                 "build",
                 "cached",
                 artifacts=[matrix_dir / "report.json", publish_srt],
-                summary=_matrix_summary(matrix_report),
+                summary=_matrix_summary(report),
             )
         else:
             matrix = run_matrix(
                 MatrixOptions(
-                    src=working_srt,
-                    tgt=translated_srt,
+                    src=track.working_srt,
+                    tgt=track.translated_srt,
                     out=matrix_dir,
-                    src_lang=resolved_src_lang,
+                    src_lang=track.src_lang,
                     tgt_lang=options.tgt_lang,
-                    limits=matrix_limits,
+                    limits=limits,
                     layout=options.wrap,
                 )
             )
             if matrix.status == "error":
                 raise PipelineError("字幕矩阵校验失败（见 matrix/report.json）")
-            record(
+            run.record(
                 "build",
                 "ok",
                 wall=time.monotonic() - stage_start,
                 artifacts=[matrix.report_path, *matrix.outputs],
                 summary=_matrix_summary(matrix.report),
             )
-        outputs["publish_srt"] = str(publish_srt.resolve())
-        if (matrix_dir / "bilingual.srt").is_file():
-            outputs["bilingual_srt"] = str((matrix_dir / "bilingual.srt").resolve())
+        run.outputs["publish_srt"] = str(publish_srt.resolve())
+        bilingual = matrix_dir / "bilingual.srt"
+        if bilingual.is_file():
+            run.outputs["bilingual_srt"] = str(bilingual.resolve())
     except (PipelineError, OSError) as exc:
-        fail("build", exc)
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
-    if should_stop("build"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+        return run.fail("build", exc)
+    return True
 
-    # ------------------------------------------------------------------ 7. dub
-    dub_dir = out_dir / "dub"
+
+def _stage_dub(run: _Run, track: _Track) -> bool:
+    """7. dub —— 按句子级译文合成配音、对轨、混回成片。
+
+    配音失败意味着"成片没声音"，但外挂字幕照旧可用，所以这里记 partial 而不是整体失败。
+    """
+
+    options = run.options
+    dub_dir = run.out_dir / "dub"
     dubbed_video = dub_dir / "dubbed.mp4"
+    voice = options.voice or DEFAULT_VOICES.get(options.tgt_lang)
+    rate = _tts_rate(options)
     stage_start = time.monotonic()
     try:
-        voice = options.voice or DEFAULT_VOICES.get(options.tgt_lang)
-        rate = _tts_rate(options)
-        dub_report = _read_json(dub_dir / "dub_report.json")
-        if (
-            cached(dub_dir / "dub_report.json", dubbed_video)
-            # --regenerate-tts 明确要求重新合成，不能拿旧配音当缓存（云端 TTS 会重新计费）
-            and not options.regenerate_tts
-            and _report_sha_matches(dub_report, translated_srt, "input", "srt", "sha256")
-            and _speakers_cache_matches(dub_report, speakers_path)
-            and _dub_tts_cache_matches(
-                dub_report,
-                voice=voice or "",
-                rate=rate,
-                voice_map=speaker_voice_map,
-                tts_command=options.tts_command,
-                tempo_limit=options.tempo_limit,
-                # 报告里记的是"实际生效"值（外部命令引擎不支持提语速），比较时也要用生效值
-                adaptive_rate=options.adaptive_rate and not options.tts_command,
-                tts_provider="command" if options.tts_command else options.tts_provider,
-                tts_fallback=options.tts_fallback
-                if options.tts_provider == "edge" and not options.tts_command
-                else "off",
-                local_fingerprint=_local_tts_fingerprint(options),
-            )
-            # BGM：开没开、用什么模式、从哪条音轨取，都改产物；只看字幕 sha 会导致
-            # "勾了保留 BGM 但成片没变"这种静默失效。（增益/闪避 pipeline 不暴露，
-            # 恒为 DubOptions 默认值，故不进判据。）
-            and _config_matches(
-                dub_report,
-                {
-                    "config": {
-                        "bgm": {
-                            "enabled": bool(options.keep_bgm),
-                            "mode": options.bgm_mode if options.keep_bgm else None,
-                            "source": str(Path(options.bgm_source or source).resolve())
-                            if options.keep_bgm
-                            else None,
-                        }
-                    }
-                },
-                tolerance=0.01,
-            )
-            # 上次 partial（例如 TTS 解释器没装 edge-tts、云端临时失败）不能算缓存，
-            # 否则用户重跑永远拿不到配音，只能手动删目录；旧报告没有 status 字段时按 ok 处理
-            and str(dub_report.get("status") or "ok") == "ok"
-        ):
-            record(
+        report = _read_json(dub_dir / "dub_report.json")
+        if _dub_cache_hit(run, track, report, voice=voice or "", rate=rate):
+            run.record(
                 "dub",
                 "cached",
                 artifacts=[dub_dir / "dub_report.json", dubbed_video],
-                summary=_dub_summary(dub_report),
+                summary=_dub_summary(report),
             )
         else:
             dub = run_dub(
                 DubOptions(
-                    srt=translated_srt,
+                    srt=track.translated_srt,
                     out=dub_dir,
-                    video=source,
+                    video=run.source,
                     voice=voice or "en-US-AriaNeural",
-                    voice_by_speaker=tuple(sorted(speaker_voice_map.items())),
-                    speakers_path=speakers_path,
+                    voice_by_speaker=tuple(sorted(track.speaker_voice_map.items())),
+                    speakers_path=track.speakers_path,
                     tts_rate=rate,
                     concurrency=options.concurrency,
                     tempo_limit=options.tempo_limit,
@@ -1176,8 +1551,8 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
                 )
             )
             dubbed_video = dub.video_path or dubbed_video
-            warnings.extend(str(item) for item in dub.report.get("warnings") or [])
-            record(
+            run.carry_warnings(dub.report)
+            run.record(
                 "dub",
                 "ok" if dub.status == "ok" else "partial",
                 wall=time.monotonic() - stage_start,
@@ -1186,123 +1561,141 @@ def run_pipeline(options: PipelineOptions) -> PipelineResult:
                 summary=_dub_summary(dub.report),
             )
             if dub.status != "ok":
-                status = "partial"
-        outputs["dub_video"] = str(dubbed_video.resolve())
-        outputs["dub_audio"] = str((dub_dir / "dubbed.wav").resolve())
+                run.status = "partial"
+        track.dubbed_video = dubbed_video
+        run.outputs["dub_video"] = str(dubbed_video.resolve())
+        run.outputs["dub_audio"] = str((dub_dir / "dubbed.wav").resolve())
     except (DubError, OSError) as exc:
-        fail("dub", exc)
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
-    if should_stop("dub"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+        return run.fail("dub", exc)
+    return True
 
-    # ------------------------------------------------------------------ 8. burn
-    # 关掉外挂字幕、直接出"带字幕的成片"（收费软件默认行为）：字幕视觉上跟画面走，
-    # 发布到不认外挂字幕的平台也不会丢。默认烧译文；--burn-mode bilingual 烧中英双语。
-    burn_dir = out_dir / "burn"
+
+def _stage_burn(run: _Run, track: _Track) -> bool:
+    """8. burn —— 把发布字幕烧进成片，让字幕跟着画面走。
+
+    关掉外挂字幕、直接出"带字幕的成片"（收费软件默认行为）：发布到不认外挂字幕的平台
+    也不会丢。默认烧译文，``--burn-mode bilingual`` 烧中英双语。
+    """
+
+    options = run.options
+    matrix_dir = run.out_dir / "matrix"
+    publish_srt = matrix_dir / f"{options.tgt_lang}.srt"
+    burn_dir = run.out_dir / "burn"
     burned_video = burn_dir / "burned.mp4"
-    mark_input = dubbed_video
-    stage_start = time.monotonic()
+    # 默认把标识打在配音成片上；烧过字幕就打在烧录产物上
+    track.mark_input = track.dubbed_video
     if not options.burn_subtitles:
-        record("burn", "skipped", summary={"reason": "已用 --no-burn-subtitles 关闭"})
-    else:
-        burn_subtitle = (
-            matrix_dir / "bilingual.ass" if options.burn_mode == "bilingual" else publish_srt
-        )
-        if not burn_subtitle.is_file():
-            warnings.append(f"要烧录的字幕不存在（{burn_subtitle.name}），已改用单语字幕")
-            burn_subtitle = publish_srt
-        try:
-            burn_report = _read_json(burn_dir / "burn.json")
-            if (
-                cached(burn_dir / "burn.json", burned_video)
-                and _report_sha_matches(burn_report, dubbed_video, "input", "video", "sha256")
-                and _report_sha_matches(
-                    burn_report, burn_subtitle, "input", "subtitle", "sha256"
-                )
-                # 码率/位置变了成片就不是同一份，不能拿旧 burned.mp4 当缓存
-                and _config_matches(
-                    burn_report,
-                    {"config": {"crf": options.burn_crf, "position": options.burn_position}},
-                )
-            ):
-                record(
-                    "burn",
-                    "cached",
-                    artifacts=[burn_dir / "burn.json", burned_video],
-                    summary=_burn_summary(burn_report),
-                )
-                warnings.extend(str(item) for item in burn_report.get("warnings") or [])
-            else:
-                burn = run_burn(
-                    BurnOptions(
-                        video=dubbed_video,
-                        subtitle=burn_subtitle,
-                        out=burn_dir,
-                        crf=options.burn_crf,
-                        position=options.burn_position,
-                    )
-                )
-                burned_video = burn.video_path
-                warnings.extend(str(item) for item in burn.report.get("warnings") or [])
-                record(
-                    "burn",
-                    "ok" if burn.status == "ok" else "partial",
-                    wall=time.monotonic() - stage_start,
-                    artifacts=[burn.report_path, burned_video, burn.ass_path],
-                    summary=_burn_summary(burn.report),
-                )
-                if burn.status != "ok":
-                    status = "partial"
-                    warnings.append("字幕烧录核验未通过，发布前请人工看一眼成片")
-            outputs["burned_video"] = str(burned_video.resolve())
-            mark_input = burned_video
-        except (BurnError, OSError) as exc:
-            fail("burn", exc)
-            return _finish(
-                options, out_dir, started_at, started, status, stages, outputs, warnings, source
-            )
-    if should_stop("burn"):
-        return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+        run.record("burn", "skipped", summary={"reason": "已用 --no-burn-subtitles 关闭"})
+        return True
 
-    # ------------------------------------------------------------------ 9. mark
-    final_dir = out_dir / "final"
-    marked_video = final_dir / "marked.mp4"
+    burn_subtitle = (
+        matrix_dir / "bilingual.ass" if options.burn_mode == "bilingual" else publish_srt
+    )
+    if not burn_subtitle.is_file():
+        run.note(f"要烧录的字幕不存在（{burn_subtitle.name}），已改用单语字幕")
+        burn_subtitle = publish_srt
     stage_start = time.monotonic()
-    if not options.mark:
-        record("mark", "skipped", summary={"reason": "已用 --no-mark 关闭 AIGC 标识"})
-    else:
-        try:
-            mark_report = _read_json(final_dir / "mark.json")
-            if cached(final_dir / "mark.json", marked_video) and _report_sha_matches(
-                mark_report, mark_input, "input", "sha256"
-            ):
-                record(
-                    "mark",
-                    "cached",
-                    artifacts=[final_dir / "mark.json", marked_video],
-                    summary={"verified": True},
+    try:
+        report = _read_json(burn_dir / "burn.json")
+        if _burn_cache_hit(run, track, report, subtitle=burn_subtitle):
+            run.record(
+                "burn",
+                "cached",
+                artifacts=[burn_dir / "burn.json", burned_video],
+                summary=_burn_summary(report),
+            )
+            run.carry_warnings(report)
+        else:
+            burn = run_burn(
+                BurnOptions(
+                    video=track.dubbed_video,
+                    subtitle=burn_subtitle,
+                    out=burn_dir,
+                    crf=options.burn_crf,
+                    position=options.burn_position,
                 )
-            else:
-                mark = run_mark(MarkOptions(src=mark_input, out=final_dir))
-                marked_video = mark.video_path or marked_video
-                verification = mark.report.get("verification") or {}
-                explicit = (verification.get("explicit_label") or {}).get("ok")  # type: ignore[union-attr]
-                implicit = (verification.get("metadata_roundtrip") or {}).get("ok")  # type: ignore[union-attr]
-                record(
-                    "mark",
-                    "ok" if mark.exit_code == 0 else "partial",
-                    wall=time.monotonic() - stage_start,
-                    artifacts=[mark.report_path, marked_video],
-                    summary={"explicit": explicit, "implicit": implicit},
-                )
-                if mark.exit_code != 0:
-                    status = "partial"
-                    warnings.append("AIGC 标识核验未通过，禁止发布")
-            outputs["final_video"] = str(marked_video.resolve())
-        except (MarkError, OSError) as exc:
-            fail("mark", exc)
+            )
+            burned_video = burn.video_path
+            run.carry_warnings(burn.report)
+            run.record(
+                "burn",
+                "ok" if burn.status == "ok" else "partial",
+                wall=time.monotonic() - stage_start,
+                artifacts=[burn.report_path, burned_video, burn.ass_path],
+                summary=_burn_summary(burn.report),
+            )
+            if burn.status != "ok":
+                run.status = "partial"
+                run.note("字幕烧录核验未通过，发布前请人工看一眼成片")
+        run.outputs["burned_video"] = str(burned_video.resolve())
+        track.mark_input = burned_video
+    except (BurnError, OSError) as exc:
+        return run.fail("burn", exc)
+    return True
 
-    return _finish(options, out_dir, started_at, started, status, stages, outputs, warnings, source)
+
+def _stage_mark(run: _Run, track: _Track) -> bool:
+    """9. mark —— 打 AIGC 标识并核验（显式标识 + 元数据往返都要能读回来）。"""
+
+    options = run.options
+    final_dir = run.out_dir / "final"
+    marked_video = final_dir / "marked.mp4"
+    if not options.mark:
+        run.record("mark", "skipped", summary={"reason": "已用 --no-mark 关闭 AIGC 标识"})
+        return True
+
+    mark_src = track.mark_input
+    if mark_src is None:
+        # 只有"上一段没有产出成片"时才会到这儿（配音失败会直接收尾），此处只防御：
+        # 与其让 MarkOptions(src=None) 抛一个看不懂的 TypeError，不如记成可读的失败。
+        return run.fail("mark", PipelineError("没有可打标识的成片"))
+    stage_start = time.monotonic()
+    try:
+        report = _read_json(final_dir / "mark.json")
+        if _mark_cache_hit(run, report, src=mark_src):
+            run.record(
+                "mark",
+                "cached",
+                artifacts=[final_dir / "mark.json", marked_video],
+                summary={"verified": True},
+            )
+        else:
+            mark = run_mark(MarkOptions(src=mark_src, out=final_dir))
+            marked_video = mark.video_path or marked_video
+            verification = mark.report.get("verification") or {}
+            explicit = (verification.get("explicit_label") or {}).get("ok")  # type: ignore[union-attr]
+            implicit = (verification.get("metadata_roundtrip") or {}).get("ok")  # type: ignore[union-attr]
+            run.record(
+                "mark",
+                "ok" if mark.exit_code == 0 else "partial",
+                wall=time.monotonic() - stage_start,
+                artifacts=[mark.report_path, marked_video],
+                summary={"explicit": explicit, "implicit": implicit},
+            )
+            if mark.exit_code != 0:
+                run.status = "partial"
+                run.note("AIGC 标识核验未通过，禁止发布")
+        run.outputs["final_video"] = str(marked_video.resolve())
+    except (MarkError, OSError) as exc:
+        return run.fail("mark", exc)
+    return True
+
+
+_STEPS: tuple[_Step, ...] = (
+    _Step("probe", _stage_probe),
+    _Step("asr", _stage_asr),
+    _Step("diarize", _stage_diarize),
+    _Step("merge", _stage_merge),
+    # 合并换了时间轴 → 说话人映射要按新字幕重建（是衔接钩子，不受 --stop-after 控制）
+    _Step(None, _remap_speakers_after_merge),
+    # 翻译前滤掉音乐/噪声糊出来的 cue（结论回填到 merge 的摘要上）
+    _Step(None, _clean_degenerate_cues),
+    _Step("translate", _stage_translate),
+    _Step("build", _stage_build),
+    _Step("dub", _stage_dub),
+    _Step("burn", _stage_burn),
+    _Step("mark", _stage_mark),
+)
 
 
 def _map_language(detected: str) -> str:
@@ -1345,7 +1738,7 @@ def _needs_diarize(options: PipelineOptions) -> bool:
 class _BackgroundJob:
     """极简后台任务（OPT-5）：daemon 线程跑一个函数，需要时 join 取结果/异常。
 
-    为什么不用 ThreadPoolExecutor：pipeline 有很多早退分支（`_finish`），
+    为什么不用 ThreadPoolExecutor：pipeline 有很多早退分支（阶段返回 False 就地收尾），
     线程池不 shutdown 会拖住进程退出；daemon 线程没这个问题。
     """
 
@@ -1767,120 +2160,3 @@ def _dub_summary(report: dict[str, object]) -> dict[str, object]:
         "tts_fallback": summary.get("tts_fallback"),
         "local_tts": summary.get("local_tts"),
     }
-
-
-def _finish(
-    options: PipelineOptions,
-    out_dir: Path,
-    started_at: datetime,
-    started: float,
-    status: str,
-    stages: list[dict[str, object]],
-    outputs: dict[str, str],
-    warnings: list[str],
-    source: Path,
-) -> PipelineResult:
-    try:
-        pricing = load_pricing(options.pricing)
-    except CostError as exc:
-        raise PipelineError(str(exc)) from exc
-    # 产物累计口径：从各阶段报告抽量再折算；缓存重跑数字不变
-    cost = build_cost(
-        out_dir,
-        tts_command=options.tts_command,
-        pricing=pricing,
-        pricing_path=options.pricing,
-    )
-    report_path = out_dir / "pipeline.json"
-    outputs["pipeline_report"] = str(report_path.resolve())
-    size, digest = file_digest(source)
-    report: dict[str, object] = {
-        "schema_version": 1,
-        "tool": "submatrix",
-        "version": __version__,
-        "command": "pipeline",
-        "generated_at": started_at.isoformat(),
-        "status": status,
-        "input": {
-            "path": str(source.resolve()),
-            "bytes": size,
-            "sha256": digest,
-        },
-        "config": {
-            "src_lang": options.src_lang,
-            "tgt_lang": options.tgt_lang,
-            "provider": _resolve_provider(options),
-            "llm_review": options.llm_review if options.llm else False,
-            "glossary_terms": len(options.glossary) if options.glossary else 0,
-            "condense": options.condense,
-            "condense_mode": options.condense_mode if options.condense else None,
-            "translate_fallback": options.translate_fallback,
-            "translate_concurrency": options.translate_concurrency,
-            "merge": options.merge,
-            "merge_max_duration": options.merge_max_duration if options.merge else None,
-            "merge_max_gap": options.merge_max_gap if options.merge else None,
-            "diarize": _needs_diarize(options),
-            "speakers": options.speakers or None,
-            "diarization_threshold": _effective_diarize_threshold(options, stages)
-            if _needs_diarize(options)
-            else None,
-            "keep_minor_speakers": options.keep_minor_speakers if _needs_diarize(options) else None,
-            "vad": options.vad if _needs_diarize(options) else None,
-            "vad_threshold": options.vad_threshold if _needs_diarize(options) and options.vad else None,
-            "clustering": options.clustering if _needs_diarize(options) else None,
-            "merge_alpha": options.merge_alpha if _needs_diarize(options) else None,
-            "speaker_voices": options.speaker_voices,
-            "wrap": options.wrap,
-            "voice": options.voice or DEFAULT_VOICES.get(options.tgt_lang),
-            "tts_rate": _tts_rate(options),
-            "dub_capacity_cps": (
-                round(value, 2) if (value := _dub_capacity_cps(options)) is not None else None
-            ),
-            "tts_command": options.tts_command,
-            "tts_provider": "command"
-            if options.tts_command
-            else options.tts_provider,
-            "tts_fallback": options.tts_fallback
-            if options.tts_provider == "edge" and not options.tts_command
-            else "off",
-            "local_tts": {
-                "model": options.local_tts_model,
-                "kind": options.local_tts_kind,
-                "voice": options.local_tts_voice or None,
-                "speed": options.local_tts_speed,
-                "threads": options.local_tts_threads,
-                "fingerprint": _local_tts_fingerprint(options),
-            },
-            "regenerate_tts": options.regenerate_tts,
-            "tempo_limit": options.tempo_limit,
-            "adaptive_rate": options.adaptive_rate,
-            "keep_bgm": options.keep_bgm,
-            "bgm_mode": options.bgm_mode if options.keep_bgm else None,
-            "burn_subtitles": options.burn_subtitles,
-            "burn_mode": options.burn_mode if options.burn_subtitles else None,
-            "burn_crf": options.burn_crf if options.burn_subtitles else None,
-            "burn_position": options.burn_position if options.burn_subtitles else None,
-            "mark": options.mark,
-            "force": options.force,
-            "stop_after": options.stop_after,
-            "pricing": options.pricing,
-        },
-        "stages": stages,
-        "cost": cost,
-        "outputs": outputs,
-        "warnings": list(dict.fromkeys(warnings)),
-        "wall_s": round(time.monotonic() - started, 1),
-    }
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    exit_code = EXIT_OK if status == "ok" else EXIT_PARTIAL
-    return PipelineResult(
-        status=status,
-        exit_code=exit_code,
-        report=report,
-        report_path=report_path.resolve(),
-        outputs=outputs,
-    )

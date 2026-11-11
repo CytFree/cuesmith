@@ -18,7 +18,7 @@ from submatrix.asr import AsrError, local_models, model_variant, preferred_model
 from submatrix.cli import build_parser
 from submatrix.diarize import SpeakerTurn, write_segments
 from submatrix.glossary import Glossary, Term, glossary_fingerprint
-from submatrix.pipeline import PipelineError, PipelineOptions, run_pipeline
+from submatrix.pipeline import PipelineError, PipelineOptions, STAGES, run_pipeline
 from submatrix.srt import load_srt
 from submatrix.translate import LlmConfig
 from submatrix.tts import speech_capacity_cps
@@ -689,6 +689,16 @@ def test_stop_after_translate(tmp_path, monkeypatch) -> None:
     assert result.status == "ok"
 
 
+def test_step_table_matches_stage_names() -> None:
+    """``STAGES``（CLI 里 ``--stop-after`` 的选项）与 ``_STEPS``（真正执行的顺序）必须一致。
+
+    加了阶段却忘了登记名字，用户就没法 ``--stop-after`` 停在新阶段；反过来登记了却
+    没接进流程，`--stop-after` 那个值等于假的。两边都得改，所以两边都得钉住。
+    """
+
+    assert tuple(step.stage for step in pipeline_module._STEPS if step.stage) == STAGES
+
+
 def test_unsupported_route_fails_with_actionable_error(tmp_path, monkeypatch) -> None:
     calls = Calls()
     install_fakes(monkeypatch, calls, route="unsupported")
@@ -1154,6 +1164,40 @@ def test_extracted_route_diarize_uses_probe_subtitle(tmp_path, monkeypatch) -> N
     assert calls.options["dub"].speakers_path == out / "diarize" / "speakers.json"  # type: ignore[union-attr]
     stages = {stage["stage"]: stage for stage in result.report["stages"]}
     assert stages["merge"]["status"] == "skipped"
+
+
+def test_stop_after_merge_skips_speaker_remap(tmp_path, monkeypatch) -> None:
+    """``--stop-after merge`` 停在"合并完成"，不该顺手把合并后的说话人映射也重建掉。
+
+    重建映射是合并与翻译之间的**衔接钩子**，不是阶段：它跑不跑取决于流程走到哪，
+    而不是 ``--stop-after`` 里那个名字。
+    """
+
+    calls = Calls()
+    install_fakes(
+        monkeypatch,
+        calls,
+        route="route_to_asr",
+        asr_srt=(
+            "1\n00:00:00,000 --> 00:00:02,000\n为了生存，它们展开\n\n"
+            "2\n00:00:02,000 --> 00:00:04,000\n一场盐的争夺战。\n"
+        ),
+    )
+    out = tmp_path / "out"
+
+    result = run_pipeline(
+        PipelineOptions(
+            src=make_src(tmp_path),
+            out=out,
+            tgt_lang="en",
+            speaker_voices="en-US-GuyNeural,en-US-AriaNeural",
+            stop_after="merge",
+        )
+    )
+
+    assert calls.order == ["probe", "asr", "diarize"]
+    assert not (out / "diarize" / "speakers.merged.json").exists()
+    assert result.report["outputs"]["speakers_json"].endswith("speakers.json")
 
 
 def test_diarize_and_dub_are_cached_on_rerun(tmp_path, monkeypatch) -> None:
@@ -1944,6 +1988,31 @@ def test_probe_cache_invalidated_by_src_lang(tmp_path, monkeypatch) -> None:
     run_pipeline(PipelineOptions(src=src, out=out, src_lang="zh", tgt_lang="en"))
 
     assert "probe" in calls.order
+
+
+def test_force_reruns_probe_even_when_manifest_matches(tmp_path, monkeypatch) -> None:
+    """``--force`` 必须压过缓存判据：manifest 完全对得上也要重跑。
+
+    判据只看"报告里记的输入/配置"，很容易写成"命中就复用"而漏掉 ``--force``——
+    用户明确要求重跑却被缓存挡住，是比"该复用却重跑"更难受的 bug。
+    """
+
+    calls = Calls()
+    install_fakes(monkeypatch, calls, route="extracted")
+    src = make_src(tmp_path)
+    out = tmp_path / "out"
+    run_pipeline(PipelineOptions(src=src, out=out, src_lang="en"))
+    calls.order.clear()
+
+    run_pipeline(PipelineOptions(src=src, out=out, src_lang="en"))
+    assert "probe" not in calls.order  # 判据全中 → 复用
+
+    calls.order.clear()
+    result = run_pipeline(PipelineOptions(src=src, out=out, src_lang="en", force=True))
+
+    assert calls.order[0] == "probe"
+    statuses = {stage["stage"]: stage["status"] for stage in result.report["stages"]}
+    assert statuses["probe"] == "ok"
 
 
 def test_asr_cache_invalidated_by_new_source(tmp_path, monkeypatch) -> None:
