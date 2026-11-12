@@ -20,7 +20,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
@@ -382,29 +382,84 @@ def _merge_tiny(
 
 
 def run_asr(options: AsrOptions) -> AsrResult:
-    source = Path(options.src)
-    if not source.is_file():
-        raise AsrError(f"输入文件不存在：{source}")
+    """把音/视频送进 ASR worker，按句切条出 SRT + 词级时间戳 + 报告。
 
-    runner = options.runner or _default_runner
-    python = find_python(options.python, runner=runner)
-    # 显式 --model 优先；否则按源语言挑（中文默认 medium，本地没有就退回 small）
-    model = find_model(options.model or preferred_model(options.language))
-    worker = Path(__file__).with_name("asr_worker.py")
+    四个阶段：准备（解释器/模型）→ 跑 worker → 切条与判读 → 落盘与报告。
+    """
 
-    out_dir = Path(options.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = out_dir / "asr-worker.json"
+    session = _AsrSession.start(options)
+    _run_worker(session)
+    _build_cues(session)
+    return _write_outputs(session)
 
+
+@dataclass(slots=True)
+class _AsrSession:
+    """一次 ASR 的现场：解释器/模型、worker 原始结果、切条结论与统计。"""
+
+    options: AsrOptions
+    source: Path
+    runner: Runner
+    python: str
+    model: str
+    out_dir: Path
+    raw_path: Path
+    started: float
+    payload: dict[str, object] = field(default_factory=dict)
+    words: list[dict[str, object]] = field(default_factory=list)
+    raw_segments: list[object] = field(default_factory=list)
+    segments: list = field(default_factory=list)
+    cues: tuple[Cue, ...] = ()
+    wall: float = 0.0
+    duration_s: float = 0.0
+    speech_s: float = 0.0
+    status: str = "ok"
+    warnings: list[str] = field(default_factory=list)
+    outputs: list[OutputFile] = field(default_factory=list)
+    srt_path: Path | None = None
+    words_path: Path | None = None
+
+    @classmethod
+    def start(cls, options: AsrOptions) -> "_AsrSession":
+        """校验输入、定位解释器与模型、建输出目录——开工前的一次性准备。"""
+
+        source = Path(options.src)
+        if not source.is_file():
+            raise AsrError(f"输入文件不存在：{source}")
+
+        runner = options.runner or _default_runner
+        python = find_python(options.python, runner=runner)
+        # 显式 --model 优先；否则按源语言挑（中文默认 medium，本地没有就退回 small）
+        model = find_model(options.model or preferred_model(options.language))
+
+        out_dir = Path(options.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = out_dir / "asr-worker.json"
+        return cls(
+            options=options,
+            source=source,
+            runner=runner,
+            python=python,
+            model=model,
+            out_dir=out_dir,
+            raw_path=raw_path,
+            started=0.0,
+        )
+
+
+def _asr_command(session: _AsrSession) -> list[str]:
+    """派给 asr_worker 的完整命令行（可选开关按需追加）。"""
+
+    options = session.options
     command = [
-        python,
-        str(worker),
+        session.python,
+        str(Path(__file__).with_name("asr_worker.py")),
         "--audio",
-        str(source),
+        str(session.source),
         "--model",
-        model,
+        session.model,
         "--output",
-        str(raw_path),
+        str(session.raw_path),
         "--beam-size",
         str(options.beam_size),
         "--compute-type",
@@ -422,60 +477,88 @@ def run_asr(options: AsrOptions) -> AsrResult:
         command.extend(["--initial-prompt", options.initial_prompt])
     if not options.vad:
         command.append("--no-vad")
+    return command
 
-    started = time.monotonic()
-    payload = run_once(
-        command,
-        raw_path,
+
+def _run_worker(session: _AsrSession) -> None:
+    """跑一次 ASR worker（独立解释器 + 子进程），拿回词级时间戳与语言判定。"""
+
+    session.started = time.monotonic()
+    session.payload = run_once(
+        _asr_command(session),
+        session.raw_path,
         error_cls=AsrError,
-        runner=runner,
+        runner=session.runner,
         label="ASR",
         failure_label="ASR 识别",
     )
 
-    words = payload.get("words") or []
-    raw_segments = payload.get("segments") or []
-    segments = segment_words(
-        words,
+
+def _build_cues(session: _AsrSession) -> None:
+    """把词级时间戳切成字幕条，并按语言判定/空结果给出状态与告警。"""
+
+    options = session.options
+    session.words = list(session.payload.get("words") or [])
+    session.raw_segments = list(session.payload.get("segments") or [])
+    session.segments = segment_words(
+        session.words,
         max_duration_ms=options.max_duration_ms,
         max_chars=options.max_chars,
         pause_ms=options.pause_ms,
         min_duration_ms=options.min_duration_ms,
     )
-    wall = time.monotonic() - started
-    duration_s = float(payload.get("duration") or 0.0)
-    speech_s = sum(segment.end_ms - segment.start_ms for segment in segments) / 1000
-
-    status = "ok"
-    warnings: list[str] = []
-    if not segments:
-        status = "empty"
-        warnings.append("没有识别出任何语音")
-    probability = payload.get("language_probability")
-    if isinstance(probability, (int, float)) and probability < 0.6:
-        warnings.append(f"语言识别置信度只有 {probability:.2f}，建议用 --language 指定语言")
-    if options.language not in ("auto", None) and payload.get("language") != options.language:
-        warnings.append(f"识别语言是 {payload.get('language')}，与指定语言 {options.language} 不一致")
-
-    cues = tuple(
-        Cue(timing=Timing(segment.start_ms, segment.end_ms), text=segment.text)
-        for segment in segments
+    session.wall = time.monotonic() - session.started
+    session.duration_s = float(session.payload.get("duration") or 0.0)
+    session.speech_s = (
+        sum(segment.end_ms - segment.start_ms for segment in session.segments) / 1000
     )
-    srt_path = out_dir / options.srt_name
-    words_path = out_dir / "words.json"
-    outputs: list[OutputFile] = []
-    if cues:
-        srt_path.write_text(dump_srt(Subtitle(cues=cues)), encoding="utf-8", newline="\n")
-        outputs.append(
-            OutputFile(kind="asr_srt", path=srt_path.resolve(), cues=len(cues), size=srt_path.stat().st_size)
+
+    probability = session.payload.get("language_probability")
+    if not session.segments:
+        session.status = "empty"
+        session.warnings.append("没有识别出任何语音")
+    if isinstance(probability, (int, float)) and probability < 0.6:
+        session.warnings.append(
+            f"语言识别置信度只有 {probability:.2f}，建议用 --language 指定语言"
         )
-    words_path.write_text(
+    if options.language not in ("auto", None) and session.payload.get("language") != options.language:
+        session.warnings.append(
+            f"识别语言是 {session.payload.get('language')}，与指定语言 {options.language} 不一致"
+        )
+
+    session.cues = tuple(
+        Cue(timing=Timing(segment.start_ms, segment.end_ms), text=segment.text)
+        for segment in session.segments
+    )
+
+
+def _write_outputs(session: _AsrSession) -> AsrResult:
+    """写 SRT、``words.json`` 与 ``asr.json``，清掉中间产物，返回命令行契约。"""
+
+    options = session.options
+    payload = session.payload
+    probability = payload.get("language_probability")
+    session.srt_path = session.out_dir / options.srt_name
+    session.words_path = session.out_dir / "words.json"
+    if session.cues:
+        session.srt_path.write_text(
+            dump_srt(Subtitle(cues=session.cues)), encoding="utf-8", newline="\n"
+        )
+        session.outputs.append(
+            OutputFile(
+                kind="asr_srt",
+                path=session.srt_path.resolve(),
+                cues=len(session.cues),
+                size=session.srt_path.stat().st_size,
+            )
+        )
+    session.words_path.write_text(
         json.dumps(
             {
                 "language": payload.get("language"),
                 "language_probability": probability,
-                "duration_s": duration_s,
-                "words": words,
+                "duration_s": session.duration_s,
+                "words": session.words,
             },
             ensure_ascii=False,
         )
@@ -483,11 +566,16 @@ def run_asr(options: AsrOptions) -> AsrResult:
         encoding="utf-8",
         newline="\n",
     )
-    outputs.append(
-        OutputFile(kind="word_timestamps", path=words_path.resolve(), cues=len(words), size=words_path.stat().st_size)
+    session.outputs.append(
+        OutputFile(
+            kind="word_timestamps",
+            path=session.words_path.resolve(),
+            cues=len(session.words),
+            size=session.words_path.stat().st_size,
+        )
     )
 
-    size, digest = file_digest(source)
+    size, digest = file_digest(session.source)
     generated_at = options.generated_at or datetime.now().astimezone()
     report: dict[str, object] = {
         "schema_version": 1,
@@ -495,17 +583,17 @@ def run_asr(options: AsrOptions) -> AsrResult:
         "version": __version__,
         "command": "asr",
         "generated_at": generated_at.isoformat(),
-        "status": status,
+        "status": session.status,
         "input": {
-            "path": str(source.resolve()),
+            "path": str(session.source.resolve()),
             "bytes": size,
             "sha256": digest,
-            "duration_s": round(duration_s, 2),
+            "duration_s": round(session.duration_s, 2),
         },
         "config": {
-            "model": model,
-            "model_variant": model_variant(model),
-            "python": python,
+            "model": session.model,
+            "model_variant": model_variant(session.model),
+            "python": session.python,
             "device": options.device,
             "compute_type": options.compute_type,
             "beam_size": options.beam_size,
@@ -521,31 +609,32 @@ def run_asr(options: AsrOptions) -> AsrResult:
         "summary": {
             "language": payload.get("language"),
             "language_probability": probability,
-            "duration_s": round(duration_s, 2),
-            "speech_s": round(speech_s, 2),
-            "words": len(words),
-            "raw_segments": len(raw_segments),
-            "cues": len(cues),
-            "avg_cue_s": round(speech_s / len(cues), 2) if cues else 0.0,
-            "rtf": round(duration_s / wall, 2) if wall > 0 else None,
-            "wall_s": round(wall, 1),
+            "duration_s": round(session.duration_s, 2),
+            "speech_s": round(session.speech_s, 2),
+            "words": len(session.words),
+            "raw_segments": len(session.raw_segments),
+            "cues": len(session.cues),
+            "avg_cue_s": (
+                round(session.speech_s / len(session.cues), 2) if session.cues else 0.0
+            ),
+            "rtf": round(session.duration_s / session.wall, 2) if session.wall > 0 else None,
+            "wall_s": round(session.wall, 1),
         },
-        "outputs": [output.to_dict() for output in outputs],
-        "warnings": warnings,
+        "outputs": [output.to_dict() for output in session.outputs],
+        "warnings": session.warnings,
     }
-    report_path = out_dir / "asr.json"
+    report_path = session.out_dir / "asr.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
     if not options.keep_raw:
-        raw_path.unlink(missing_ok=True)
+        session.raw_path.unlink(missing_ok=True)
 
-    exit_code = EXIT_OK if cues else EXIT_INVALID
     return AsrResult(
-        status=status,
-        exit_code=exit_code,
+        status=session.status,
+        exit_code=EXIT_OK if session.cues else EXIT_INVALID,
         report=report,
         report_path=report_path.resolve(),
-        srt_path=srt_path.resolve() if cues else None,
-        words_path=words_path.resolve(),
+        srt_path=session.srt_path.resolve() if session.cues else None,
+        words_path=session.words_path.resolve(),
     )
