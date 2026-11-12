@@ -74,7 +74,7 @@ def format_ass_time(ms: int) -> str:
 
 
 _ASS_HEADER = f"""[Script Info]
-Title: submatrix
+Title: cuesmith
 ScriptType: v4.00+
 WrapStyle: 0
 ScaledBorderAndShadow: yes

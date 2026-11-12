@@ -252,7 +252,7 @@ def run_merge(
         }
     report: dict[str, object] = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "merge",
         "generated_at": (generated_at or datetime.now().astimezone()).isoformat(),

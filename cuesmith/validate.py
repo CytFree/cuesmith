@@ -36,7 +36,7 @@ DEFAULT_TGT_LANG = "en"
 class Limits:
     """可配置阈值。源/目标各一套，因为两种语言的计量口径不同。
 
-    默认值从 :mod:`submatrix.langs` 的 ``LANG_PROFILES`` 推导，不再各存一份字面量——
+    默认值从 :mod:`cuesmith.langs` 的 ``LANG_PROFILES`` 推导，不再各存一份字面量——
     改阈值只需要改那一张表。
     """
 

@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import bgm as bgm_module
-from submatrix import dub as dub_module
-from submatrix.bgm import (
+from cuesmith import bgm as bgm_module
+from cuesmith import dub as dub_module
+from cuesmith.bgm import (
     BgmError,
     BgmOptions,
     BgmResult,
@@ -27,7 +27,7 @@ from submatrix.bgm import (
     mix_voice_and_bgm,
     run_bgm,
 )
-from submatrix.dub import DubError, DubOptions, run_dub
+from cuesmith.dub import DubError, DubOptions, run_dub
 from tests.support import FFMPEG, FFPROBE, build_test_video, requires_media_tools
 
 pytestmark = requires_media_tools
@@ -132,7 +132,7 @@ def test_mix_filter_can_skip_ducking(tmp_path) -> None:
 
 
 def test_demucs_candidates_order_and_dedup(monkeypatch) -> None:
-    monkeypatch.setenv("SUBMATRIX_DEMUCS_PYTHON", r"C:\env\python.exe")
+    monkeypatch.setenv("CUESMITH_DEMUCS_PYTHON", r"C:\env\python.exe")
 
     candidates = demucs_candidates(r"C:\explicit\python.exe", None, r"C:\explicit\python.exe")
 

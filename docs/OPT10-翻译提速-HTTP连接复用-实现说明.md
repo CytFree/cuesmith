@@ -19,7 +19,7 @@
 
 ## 2. 改法：线程内复用一条 HTTPS keep-alive 连接
 
-`submatrix/translate.py` 的默认 transport（`_default_transport`）从"每次 urllib 新建请求"
+`cuesmith/translate.py` 的默认 transport（`_default_transport`）从"每次 urllib 新建请求"
 改为 **thread-local 的 `http.client.HTTPSConnection`**：
 
 - 每个工作线程持有一条连接，第一个请求付一次 TLS，之后同一端点直接复用（`from/to` 在 URL query 里，路径不变）；

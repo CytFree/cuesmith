@@ -13,7 +13,7 @@ traceback 截断长度不同、有的写进度有的不写，父进程侧的解�
 1. **一次性**（asr / diarize）：worker 把结果写进 ``--output`` 指定的 JSON 文件，
    父进程用 :func:`run_once` 读回来。
 2. **常驻**（tts）：worker 在 stdout 上按行读写 JSONL（模型只加载一次、合成多次），
-   父进程客户端在 :mod:`submatrix.localtts`；两侧共用 :func:`error_payload` /
+   父进程客户端在 :mod:`cuesmith.localtts`；两侧共用 :func:`error_payload` /
    :func:`describe_error` 的失败形状。
 
 统一的 payload 形状::
@@ -23,8 +23,8 @@ traceback 截断长度不同、有的写进度有的不写，父进程侧的解�
 
 为什么这个文件不能有 ``from .`` 相对导入
 ----------------------------------------
-worker 是 ``python submatrix/asr_worker.py`` 直接执行的，``sys.path[0]`` 是
-``submatrix/``，只能 ``import worker_protocol``；主包侧则走
+worker 是 ``python cuesmith/asr_worker.py`` 直接执行的，``sys.path[0]`` 是
+``cuesmith/``，只能 ``import worker_protocol``；主包侧则走
 ``from .worker_protocol import ...``。两条导入路径都成立的前提是本文件只用标准库。
 """
 

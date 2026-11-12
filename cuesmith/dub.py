@@ -180,7 +180,7 @@ def _local_model_info(options: DubOptions) -> tuple[Path, str]:
         raise DubError(
             "没有找到本地 TTS 模型：用 --local-tts-model 指定模型目录"
             "（例如 spike/local-tts/kokoro-multi-lang-v1_0），"
-            "或设置 SUBMATRIX_LOCAL_TTS_MODEL"
+            "或设置 CUESMITH_LOCAL_TTS_MODEL"
         )
     kind = (
         options.local_tts_kind
@@ -1237,7 +1237,7 @@ def _build_report(session: _Session, outputs: _Outputs, *, status: str) -> dict[
     generated_at = options.generated_at or datetime.now().astimezone()
     return {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "dub",
         "generated_at": generated_at.isoformat(),

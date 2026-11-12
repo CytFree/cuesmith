@@ -1,6 +1,6 @@
 """本地 TTS 常驻 worker：由主包用"装了 sherpa-onnx 的 Python"拉起，**只有这里 import sherpa_onnx**。
 
-主包（``submatrix``）纪律是"只用标准库 + ffmpeg、模型只在子进程里跑"（PRD 锁定），
+主包（``cuesmith``）纪律是"只用标准库 + ffmpeg、模型只在子进程里跑"（PRD 锁定），
 所以本地 TTS 的模型加载/推理全部隔离在本进程里。进程常驻，模型只加载一次，
 之后通过 stdin/stdout 逐行 JSON 通信（stdout 只走协议，库的日志被改道到 stderr）：
 
@@ -27,7 +27,7 @@
 
 用法::
 
-    <sherpa-python> submatrix/tts_worker.py --model-dir DIR [--kind auto|kokoro|vits]
+    <sherpa-python> cuesmith/tts_worker.py --model-dir DIR [--kind auto|kokoro|vits]
                                             [--threads 8]
 
 注意：sherpa-onnx 2.0 对 Piper/VITS-espeak 模型不支持 ``data_dir`` 前端，本 worker
@@ -45,7 +45,7 @@ from pathlib import Path
 
 if __package__:
     from . import worker_protocol as protocol
-else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
+else:  # 脚本直跑：sys.path[0] 是 cuesmith/，只能按顶层模块导入
     import worker_protocol as protocol
 
 __all__ = [

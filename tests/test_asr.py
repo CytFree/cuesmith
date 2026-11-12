@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.asr import (
+from cuesmith.asr import (
     AsrError,
     AsrOptions,
     find_model,
@@ -289,9 +289,9 @@ def test_find_model_passes_through_unknown_names() -> None:
 
 
 def test_find_model_rejects_missing_default(tmp_path, monkeypatch) -> None:
-    import submatrix.asr as asr_module
+    import cuesmith.asr as asr_module
 
-    monkeypatch.delenv("SUBMATRIX_ASR_MODEL", raising=False)
+    monkeypatch.delenv("CUESMITH_ASR_MODEL", raising=False)
     monkeypatch.setattr(asr_module, "_model_dir_ok", lambda directory: None)
 
     with pytest.raises(AsrError, match="--model"):
@@ -315,7 +315,7 @@ def test_short_tail_cue_merges_even_if_slightly_over_max_duration() -> None:
 def test_model_dir_resolves_hf_cache_snapshot(tmp_path) -> None:
     """HF 缓存布局（snapshots/<hash>/model.bin）也要能用，不能只认平铺目录。"""
 
-    from submatrix.asr import _model_dir_ok
+    from cuesmith.asr import _model_dir_ok
 
     flat = tmp_path / "flat"
     flat.mkdir()

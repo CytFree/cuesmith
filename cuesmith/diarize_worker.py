@@ -2,9 +2,9 @@
 """sherpa-onnx 离线说话人分离 worker。
 
 这个脚本只跑在 ``spike/diarization/.venv`` 里（sherpa-onnx + onnxruntime + numpy），
-主包 submatrix 保持"标准库 + ffmpeg"，模型只在进程边界调用（和 demucs/ASR 同一口径）。
+主包 cuesmith 保持"标准库 + ffmpeg"，模型只在进程边界调用（和 demucs/ASR 同一口径）。
 
-输入必须是 **16kHz / 16bit / 单声道** WAV（由 ``submatrix.diarize`` 用 ffmpeg 抽好）。
+输入必须是 **16kHz / 16bit / 单声道** WAV（由 ``cuesmith.diarize`` 用 ffmpeg 抽好）。
 输出 JSON：``{"ok": true, "segments": [{"start": 0.31, "end": 6.86, "speaker": 0}, ...]}``。
 出错时也写 JSON（``ok=false`` + traceback），让主进程能给出可读错误。
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 if __package__:
     from . import worker_protocol as protocol
-else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
+else:  # 脚本直跑：sys.path[0] 是 cuesmith/，只能按顶层模块导入
     import worker_protocol as protocol
 
 # 拼接语音段时插入的静音（秒）：完全无缝拼接会让分割模型把两段不同的话

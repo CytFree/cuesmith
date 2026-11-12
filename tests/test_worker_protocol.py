@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import worker_protocol as protocol
+from cuesmith import worker_protocol as protocol
 
 WORKER_SCRIPTS = ("asr_worker.py", "diarize_worker.py", "tts_worker.py")
 
@@ -91,7 +91,7 @@ def test_emit_progress_goes_to_stderr_only(capsys) -> None:
 
 
 def test_worker_scripts_can_import_protocol_in_script_mode() -> None:
-    """worker 是 ``python submatrix/xxx_worker.py`` 直跑的：sys.path[0] 是 submatrix/，
+    """worker 是 ``python cuesmith/xxx_worker.py`` 直跑的：sys.path[0] 是 cuesmith/，
     此时只能 ``import worker_protocol``。跑一次 --help 就是这条导入路径的回归测试。
     """
 

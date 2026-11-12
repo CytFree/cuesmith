@@ -8,7 +8,7 @@
 
 - ``sherpa-onnx`` 离线说话人分离（pyannote segmentation-3.0 + 3D-Speaker/NeMo 声纹，
   ONNX / CPU）：纯 CPU 可跑，模型合计约 82MB，只装在 ``spike/diarization/.venv``；
-- 模型只通过子进程调用（:mod:`submatrix.diarize_worker`），主包保持"标准库 + ffmpeg"。
+- 模型只通过子进程调用（:mod:`cuesmith.diarize_worker`），主包保持"标准库 + ffmpeg"。
 
 产出两份东西：
 
@@ -250,7 +250,7 @@ _DIARIZE_PYTHON = Requirement(
     label="sherpa-onnx",
     module="sherpa_onnx",
     parameter="--diarize-python",
-    env_var="SUBMATRIX_DIARIZATION_PYTHON",
+    env_var="CUESMITH_DIARIZATION_PYTHON",
     hint="先建隔离环境：python -m venv spike/diarization/.venv + "
     "pip install sherpa-onnx numpy==1.26.4。",
 )
@@ -309,7 +309,7 @@ def _is_vad(path: Path) -> bool:
 def find_vad_model(explicit: str | Path | None = None) -> Path | None:
     """定位 silero VAD 模型（OPT-6）；没装就返回 None（VAD 只是优化，不是必需件）。
 
-    优先级：显式参数（不存在则报错）> ``SUBMATRIX_DIARIZATION_VAD``（存在才用）
+    优先级：显式参数（不存在则报错）> ``CUESMITH_DIARIZATION_VAD``（存在才用）
     > 项目内 ``spike/diarization/models/vad/silero_vad.onnx``。
     """
 
@@ -318,7 +318,7 @@ def find_vad_model(explicit: str | Path | None = None) -> Path | None:
         if not path.is_file():
             raise DiarizeError(f"VAD 模型文件不存在：{path}")
         return path
-    env = os.environ.get("SUBMATRIX_DIARIZATION_VAD")
+    env = os.environ.get("CUESMITH_DIARIZATION_VAD")
     if env:
         path = Path(env)
         if path.is_file():
@@ -337,7 +337,7 @@ def find_models(
 
     candidates = _onnx_files()
     segmentation_path = _first_model(
-        segmentation or os.environ.get("SUBMATRIX_DIARIZATION_SEGMENTATION"),
+        segmentation or os.environ.get("CUESMITH_DIARIZATION_SEGMENTATION"),
         candidates,
         want_segmentation=True,
     )
@@ -350,7 +350,7 @@ def find_models(
     preferred = DEFAULT_EMBEDDING_MODELS.get((language or "").lower())
     ordered: list[Path | str | None] = [
         embedding,
-        os.environ.get("SUBMATRIX_DIARIZATION_EMBEDDING"),
+        os.environ.get("CUESMITH_DIARIZATION_EMBEDDING"),
     ]
     if preferred:
         ordered.append(_models_dir() / preferred)
@@ -803,7 +803,7 @@ def write_segments(
     size, digest = file_digest(Path(source_path))
     payload = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "source": {
             "path": str(Path(source_path).resolve()),
@@ -885,7 +885,7 @@ def attach_speakers(
     srt_size, srt_sha = file_digest(srt_path)
     atomic.write_json(speakers_path, {
                 "schema_version": 1,
-                "tool": "submatrix",
+                "tool": "cuesmith",
                 "version": __version__,
                 "srt": str(srt_path.resolve()),
                 "speakers": speakers,
@@ -894,7 +894,7 @@ def attach_speakers(
 
     merged = dict(report or {})
     merged["schema_version"] = 1
-    merged["tool"] = "submatrix"
+    merged["tool"] = "cuesmith"
     merged["version"] = __version__
     merged["command"] = "diarize"
     merged["generated_at"] = (generated_at or datetime.now().astimezone()).isoformat()
@@ -1234,7 +1234,7 @@ def _assign_speakers(session: _DiarizeSession) -> None:
     session.speakers_path = session.out_dir / "speakers.json"
     atomic.write_json(session.speakers_path, {
                 "schema_version": 1,
-                "tool": "submatrix",
+                "tool": "cuesmith",
                 "version": __version__,
                 "srt": str(session.srt.resolve()),
                 "speakers": session.speakers,
@@ -1270,7 +1270,7 @@ def _write_outputs(session: _DiarizeSession) -> DiarizeResult:
     generated_at = options.generated_at or datetime.now().astimezone()
     report: dict[str, object] = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "diarize",
         "generated_at": generated_at.isoformat(),

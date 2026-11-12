@@ -2,19 +2,19 @@
 
 刻意保持薄：
 
-- GUI 不复制任何编排逻辑——所有执行都交给 ``python -m submatrix pipeline``，
+- GUI 不复制任何编排逻辑——所有执行都交给 ``python -m cuesmith pipeline``，
   参数一键透传（``额外参数`` 输入框），CLI 以后加 flag 不用改 GUI；
 - **批量**：路径一行一个 / 多文件上传，逐个跑（各自独立输出目录与报告）；
 - **取消**：停止按钮终止子进程树（Windows ``taskkill /T``），已落盘产物保留；
 - **预览**：成片直接内嵌播放；批量结果表汇总每条的状态/用量/成本；成片；
-- **音色**（M16）：按目标语言的下拉 + 真实试听；目录来自 ``submatrix.voices``（离线有兜底）；
+- **音色**（M16）：按目标语言的下拉 + 真实试听；目录来自 ``cuesmith.voices``（离线有兜底）；
 - **多人声**（M16）：可填音色池/显式映射，跑完回填「说话人 → 音色」表，改表后可
   「重配音色」——复用上次 ASR/翻译缓存，只重跑配音与烧字；
 - 生成器边跑边回显日志；跑完读 ``pipeline.json`` 展示产物、成本块与说话人表；
 - API Key 只注入本次子进程环境变量，不落盘、不回显；
 - 默认只监听 127.0.0.1，不做公网共享。
 
-``gradio`` 是可选依赖：模块顶层不 import，``python -m submatrix gui`` 会检查并在
+``gradio`` 是可选依赖：模块顶层不 import，``python -m cuesmith gui`` 会检查并在
 仓库自带 venv 存在时自动重入（见 M13/M14 文档）。
 """
 
@@ -261,7 +261,7 @@ def build_argv(
     enabled = {str(feature).lower() for feature in features}
     argv: list[str] = [
         "-m",
-        "submatrix",
+        "cuesmith",
         "pipeline",
         "--src",
         src,
@@ -1071,9 +1071,9 @@ def build_app(*, repo_root: Path = REPO_ROOT, store: HistoryStore | None = None)
         except HistoryError:
             store = None
 
-    with gr.Blocks(title="submatrix · 视频字幕与配音") as app:
+    with gr.Blocks(title="cuesmith · 视频字幕与配音") as app:
         gr.Markdown(
-            "# submatrix：视频字幕提取 / 翻译 / 配音 / 成片\n"
+            "# cuesmith：视频字幕提取 / 翻译 / 配音 / 成片\n"
             "本地 CLI 的薄壳：勾选项会拼成 `pipeline` 参数，实时日志可查；"
             "支持**批量**（路径一行一个 / 多文件上传）与**停止**；"
             "跑完自动展示产物、成片预览和 **成本汇总**（本地 ASR/分离/BGM 不产生费用）。"

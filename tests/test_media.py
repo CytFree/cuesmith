@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import media
+from cuesmith import media
 
 
 class Boom(RuntimeError):

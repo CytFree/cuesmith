@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from submatrix.glossary import Glossary, GlossaryError, Term, glossary_fingerprint, parse_terms
+from cuesmith.glossary import Glossary, GlossaryError, Term, glossary_fingerprint, parse_terms
 
 
 def write(tmp_path, name: str, content: str):

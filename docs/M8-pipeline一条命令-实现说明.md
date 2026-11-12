@@ -1,7 +1,7 @@
 # M8 — 一条命令全链路（pipeline）+ 中文默认 medium
 
 > 状态：**已完成**。用户口径："A + B 线做完"——A = 中文源语默认用 medium 模型；
-> B = 一条命令跑完全链路。新增 `submatrix/pipeline.py` 与 `pipeline` 子命令。
+> B = 一条命令跑完全链路。新增 `cuesmith/pipeline.py` 与 `pipeline` 子命令。
 > 验收：**AC-23**。测试 **455 passed**，一键回归 **26/26（29.5s）**。
 >
 > **M9 增补**（另见 `M9-句子合并与BGM高清混音-实现说明.md`）：asr 与 translate 之间
@@ -19,11 +19,11 @@
 M0–M7 的能力都齐了，但要用起来得手动串 5 条命令：
 
 ```powershell
-python -m submatrix asr ...        # 或 probe（有内封字幕时）
-python -m submatrix translate ...
-python -m submatrix build --wrap ...
-python -m submatrix dub --keep-bgm ...
-python -m submatrix mark ...
+python -m cuesmith asr ...        # 或 probe（有内封字幕时）
+python -m cuesmith translate ...
+python -m cuesmith build --wrap ...
+python -m cuesmith dub --keep-bgm ...
+python -m cuesmith mark ...
 ```
 
 每条命令的参数、输出目录、下一步该喂哪个文件，都要人去记。改一次字幕重跑，前面
@@ -60,7 +60,7 @@ DEFAULT_MODEL_BY_LANGUAGE = {"zh": "medium", "yue": "medium", "ja": "medium", "k
 ```powershell
 $env:DEEPSEEK_API_KEY = "sk-..."    # 只在当前 shell
 
-python -m submatrix pipeline `
+python -m cuesmith pipeline `
   --src work/user-en/seg.mp4 --out work/pipeline-demo `
   --llm --glossary work/tmp/glossary.json `
   --src-lang en --tgt-lang zh `

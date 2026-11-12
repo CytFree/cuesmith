@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-CLI = [sys.executable, "-m", "submatrix"]
+CLI = [sys.executable, "-m", "cuesmith"]
 # 占位 TTS：1.5 秒正弦，只验流水线
 STUB_TTS = 'ffmpeg -v error -y -f lavfi -i "sine=frequency=440:duration=1.5" {out}'
 
@@ -74,7 +74,7 @@ def slug(text: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="submatrix 全链路样本回归")
+    parser = argparse.ArgumentParser(description="cuesmith 全链路样本回归")
     parser.add_argument("--out", type=Path, default=Path("work/regression"))
     parser.add_argument(
         "--real-tts-python",
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     long_en = ROOT / "work/samples-v2/long_en.srt"
     long_extracted = out_root / "routing" / slug("1小时长视频") / "source.srt"
     if long_zh.is_file() and long_extracted.is_file():
-        from submatrix.srt import load_srt
+        from cuesmith.srt import load_srt
 
         expected_sub, _ = load_srt(long_zh)
         actual_sub, _ = load_srt(long_extracted)
@@ -462,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # 7) 词级切条（ASR 后处理规则，合成数据离线验证）
-    from submatrix.asr import segment_words
+    from cuesmith.asr import segment_words
 
     synthetic_words = [
         {"start": 0.0, "end": 0.4, "word": " Hello"},
@@ -504,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
     wall_s = round(time.monotonic() - started, 1)
     regression = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "command": "run_samples",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "summary": {"checks": len(checks), "passed": passed, "failed": len(checks) - passed, "wall_s": wall_s},

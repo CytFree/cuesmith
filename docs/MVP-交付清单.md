@@ -29,12 +29,12 @@
 
 | 交付物 | 路径 | 说明 |
 |---|---|---|
-| 主包 | `submatrix/` | CLI + 编排；零运行时依赖 |
-| CLI 入口 | `python -m submatrix` | `build/probe/asr/translate/merge/dub/burn/mark/diarize/pipeline/cost/gui/history` |
-| GUI | `python -m submatrix gui` | Gradio 薄壳，默认 `127.0.0.1:7860`；含「任务历史」页 |
-| 任务历史库 | `work/history.db`（sqlite）+ `python -m submatrix history` | 关页面/重启可查、可载入参数/重跑/删记录 |
-| worker 脚本 | `submatrix/asr_worker.py`、`diarize_worker.py`、`tts_worker.py` | 只跑在各自 venv |
-| 本地 TTS 引擎 | `submatrix/localtts.py`（主包侧纯标准库）+ `spike/local-tts/` 模型 | 离线/联网失败兜底；默认仍 Edge |
+| 主包 | `cuesmith/` | CLI + 编排；零运行时依赖 |
+| CLI 入口 | `python -m cuesmith` | `build/probe/asr/translate/merge/dub/burn/mark/diarize/pipeline/cost/gui/history` |
+| GUI | `python -m cuesmith gui` | Gradio 薄壳，默认 `127.0.0.1:7860`；含「任务历史」页 |
+| 任务历史库 | `work/history.db`（sqlite）+ `python -m cuesmith history` | 关页面/重启可查、可载入参数/重跑/删记录 |
+| worker 脚本 | `cuesmith/asr_worker.py`、`diarize_worker.py`、`tts_worker.py` | 只跑在各自 venv |
+| 本地 TTS 引擎 | `cuesmith/localtts.py`（主包侧纯标准库）+ `spike/local-tts/` 模型 | 离线/联网失败兜底；默认仍 Edge |
 | 工具 | `tools/run_samples.py`（27 项回归）、`tools/gui_smoke.py`（GUI 冒烟）、`tools/gui_history_real.py`（任务历史真实 HTTP 验证）、`tools/bench_local_tts.py`（本地 TTS 横评）、`tools/tts_dashscope.py`、`tools/clone_voice.py`、`tools/voice_similarity.py`、`tools/validate_diarization_accuracy.py` | 验收/云端扩展 |
 | 测试 | `tests/` | 751 个单测 |
 
@@ -67,7 +67,7 @@
 ### 3.1 环境自检
 
 ```powershell
-python -m submatrix --help                                  # 无报错，列出子命令
+python -m cuesmith --help                                  # 无报错，列出子命令
 python -m pytest -q                                         # 期望：751 passed
 python tools\run_samples.py --out work\acceptance           # 期望：27/27 通过（约 90s）
 ```
@@ -75,7 +75,7 @@ python tools\run_samples.py --out work\acceptance           # 期望：27/27 通
 ### 3.2 单条真实素材（zh→en）
 
 ```powershell
-python -m submatrix pipeline --src spike\samples\S1_softsub.mkv --out work\acceptance\one `
+python -m cuesmith pipeline --src spike\samples\S1_softsub.mkv --out work\acceptance\one `
     --src-lang zh --tgt-lang en
 ```
 
@@ -90,7 +90,7 @@ python -m submatrix pipeline --src spike\samples\S1_softsub.mkv --out work\accep
 ### 3.4 多人声（可选）
 
 ```powershell
-python -m submatrix pipeline --src work\multi-speaker\demo2.mp4 --out work\acceptance\multi `
+python -m cuesmith pipeline --src work\multi-speaker\demo2.mp4 --out work\acceptance\multi `
     --src-lang zh --tgt-lang en --diarize --speakers 2 --asr-model medium
 ```
 
@@ -100,7 +100,7 @@ python -m submatrix pipeline --src work\multi-speaker\demo2.mp4 --out work\accep
 ### 3.5 GUI（可选）
 
 ```powershell
-python -m submatrix gui
+python -m cuesmith gui
 ```
 
 期望：浏览器打开 `http://127.0.0.1:7860/`；选音色点「试听」有声音；
@@ -110,7 +110,7 @@ python -m submatrix gui
 ### 3.6 成本汇总
 
 ```powershell
-python -m submatrix cost --work work\acceptance\one
+python -m cuesmith cost --work work\acceptance\one
 ```
 
 期望：打印分项与合计；免费路径（未开 `--llm`、未用云端 TTS）金额为 ¥0。
@@ -151,9 +151,9 @@ python -m submatrix cost --work work\acceptance\one
 与素材授权相关）。要核对上表，请本地复跑——命令见 §3.1–§3.6，或直接：
 
 ```powershell
-$env:SUBMATRIX_REAL_VIDEO = "D:\...\你的视频.mp4"
-$env:SUBMATRIX_REAL_OUT   = "work/cctv-demo"
-$env:SUBMATRIX_REAL_E2E   = "1"
+$env:CUESMITH_REAL_VIDEO = "D:\...\你的视频.mp4"
+$env:CUESMITH_REAL_OUT   = "work/cctv-demo"
+$env:CUESMITH_REAL_E2E   = "1"
 python -m pytest tests/test_real_sample.py -q -m slow
 ```
 
@@ -204,14 +204,14 @@ python -m pytest tests/test_real_sample.py -q -m slow
 
 ## 7. 交付前检查清单（打勾用）
 
-- [ ] `python -m submatrix --help` 正常
+- [ ] `python -m cuesmith --help` 正常
 - [ ] `python -m pytest -q` → 751 passed
 - [ ] `python tools\run_samples.py --out work\acceptance` → 27/27
 - [ ] 一条 zh→en 真实素材产出 `burned.mp4` + 字幕 + `pipeline.json(status=ok)`
 - [ ] 同目录重跑命中缓存（总耗时明显下降）
 - [ ] GUI 打开、试听有声音、批量结果表有行
 - [ ] 多人声素材说话人表人数与预期一致、音色互不相同；自动判人数与 `--speakers N` 结果一致（默认 VAD+二次聚类已开，可用 `--no-vad`/`--clustering sherpa` 对比）
-- [ ] GUI 跑一条后「任务历史」出现记录；重启 GUI/重开页面仍在；「重跑选中」生成带 `replay_of` 的新记录；`python -m submatrix history --limit 5` 能列出
+- [ ] GUI 跑一条后「任务历史」出现记录；重启 GUI/重开页面仍在；「重跑选中」生成带 `replay_of` 的新记录；`python -m cuesmith history --limit 5` 能列出
 - [ ] 断网/Edge 不可用时配音仍能出片：`dub --tts-provider local` 或默认兜底跑通（报告 `summary.tts_fallback` / `local_tts` 有记录）
 - [ ] 成本汇总金额与是否开了付费项一致（免费路径 ¥0）
 - [ ] 发布素材已按平台要求确认 AIGC 标识

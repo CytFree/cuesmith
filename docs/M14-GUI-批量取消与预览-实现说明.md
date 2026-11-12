@@ -3,7 +3,7 @@
 > M13 的 GUI 只能"跑一条、等它跑完、不能停"。M14 把它补成能日常干活的样子：
 > **批量队列、停止按钮、成片预览、缓存/术语表开关**。
 >
-> 边界不变：**GUI 仍是 CLI 的薄壳**，所有执行都走 `python -m submatrix pipeline`，
+> 边界不变：**GUI 仍是 CLI 的薄壳**，所有执行都走 `python -m cuesmith pipeline`，
 > 不复制任何编排/翻译/配音逻辑。
 >
 > 结果：**588 个测试全绿（+7）**、**27/27 一键回归通过（36.3s）**、GUI 无头冒烟 HTTP 200、
@@ -83,17 +83,17 @@ else:
 
 | 文件 | 变更 |
 |---|---|
-| `submatrix/gui.py` | 重构：`RunController` / 批量解析 / 停止 / 预览 / 结果表 / 缓存开关（约 550 行）；M14.1 增加 ASR 模型 / TTS Python 入口 |
-| `submatrix/tts.py` | 新增 `find_edge_tts_python()`（M14.1） |
-| `submatrix/dub.py` | Edge 引擎默认自动探测解释器；报告记录 `tts_python`（M14.1） |
-| `submatrix/pipeline.py` | dub `partial` 不当缓存；显式 `--asr-model` 变化使 ASR 缓存失效（M14.1） |
-| `submatrix/bgm.py` | demucs 伴奏轨按源片 sha256 复用（M14.1） |
+| `cuesmith/gui.py` | 重构：`RunController` / 批量解析 / 停止 / 预览 / 结果表 / 缓存开关（约 550 行）；M14.1 增加 ASR 模型 / TTS Python 入口 |
+| `cuesmith/tts.py` | 新增 `find_edge_tts_python()`（M14.1） |
+| `cuesmith/dub.py` | Edge 引擎默认自动探测解释器；报告记录 `tts_python`（M14.1） |
+| `cuesmith/pipeline.py` | dub `partial` 不当缓存；显式 `--asr-model` 变化使 ASR 缓存失效（M14.1） |
+| `cuesmith/bgm.py` | demucs 伴奏轨按源片 sha256 复用（M14.1） |
 | `tests/test_tts.py` | 新增 4 个（M14.1） |
 | `tests/test_bgm.py` | +2 伴奏复用（M14.1） |
 | `tests/test_dub.py` | +2 解释器探测（M14.1） |
 | `tests/test_pipeline.py` | +2 缓存失效（M14.1） |
-| `submatrix/cost.py` | 新增 `format_amount()`（批量表用） |
-| `submatrix/cli.py` | `gui --allowed-path`，重入时透传 |
+| `cuesmith/cost.py` | 新增 `format_amount()`（批量表用） |
+| `cuesmith/cli.py` | `gui --allowed-path`，重入时透传 |
 | `tests/test_gui.py` | 11 → 18 个测试 |
 | `tests/test_cost.py` | 增加 `format_amount` 断言 |
 | `tools/gui_smoke.py` | 不变（继续做无头冒烟） |
@@ -132,7 +132,7 @@ else:
 
 ### 6.3 修复
 
-1. **`tts.find_edge_tts_python()`**：显式 `--tts-python` → `SUBMATRIX_TTS_PYTHON` →
+1. **`tts.find_edge_tts_python()`**：显式 `--tts-python` → `CUESMITH_TTS_PYTHON` →
    当前解释器 → `spike/.venv311` → `spike/pyvideotrans/.venv` → 仓库 `.venv`，
    逐个 `import edge_tts` 探测；`build_engine` 默认用它（显式值不探测，尊重用户）。
    dub 报告记录实际解释器 `tts_python`，排障不再靠猜。

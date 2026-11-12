@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import gradio as gr
 
-    from submatrix.gui import build_app
+    from cuesmith.gui import build_app
 
     port = args.port or free_port()
     app = build_app()

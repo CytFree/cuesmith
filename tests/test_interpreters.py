@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import interpreters as ip
+from cuesmith import interpreters as ip
 
 REQUIREMENT = ip.Requirement(
     label="faster-whisper",
     module="faster_whisper",
     parameter="--asr-python",
-    env_var="SUBMATRIX_ASR_PYTHON",
+    env_var="CUESMITH_ASR_PYTHON",
     hint="例如 spike/pyvideotrans/.venv/Scripts/python.exe。",
 )
 
@@ -105,7 +105,7 @@ def test_missing_message_contains_actionable_parts() -> None:
     assert "faster-whisper" in message
     assert "import faster_whisper" in message
     assert "--asr-python" in message
-    assert "SUBMATRIX_ASR_PYTHON" in message
+    assert "CUESMITH_ASR_PYTHON" in message
     assert "spike/pyvideotrans" in message
     assert "/a/python: 路径不存在" in message
 

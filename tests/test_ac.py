@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import json
 
-from submatrix.matrix import MatrixOptions, run_matrix
-from submatrix.srt import Cue, Subtitle, Timing, dump_srt, parse_srt
+from cuesmith.matrix import MatrixOptions, run_matrix
+from cuesmith.srt import Cue, Subtitle, Timing, dump_srt, parse_srt
 
 # 7 条 cue，逐条塞一种/多种违例
 VIOLATION_SRC = Subtitle(

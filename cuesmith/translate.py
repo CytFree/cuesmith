@@ -136,7 +136,7 @@ class LlmConfig:
     """OpenAI 兼容端点配置；全部可从环境变量取，避免把 key 写进命令行历史。
 
     默认服务商：检测到 `DEEPSEEK_API_KEY` 时用 DeepSeek（`https://api.deepseek.com/v1`，
-    模型 `deepseek-chat`）；否则用 OpenAI 默认值。可用 `SUBMATRIX_LLM_BASE_URL` 覆盖。
+    模型 `deepseek-chat`）；否则用 OpenAI 默认值。可用 `CUESMITH_LLM_BASE_URL` 覆盖。
     """
 
     base_url: str = "https://api.openai.com/v1"
@@ -155,12 +155,12 @@ class LlmConfig:
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
         resolved_key = (
             api_key
-            or os.environ.get("SUBMATRIX_LLM_API_KEY")
+            or os.environ.get("CUESMITH_LLM_API_KEY")
             or deepseek_key
             or os.environ.get("OPENAI_API_KEY")
             or None
         )
-        env_base = os.environ.get("SUBMATRIX_LLM_BASE_URL")
+        env_base = os.environ.get("CUESMITH_LLM_BASE_URL")
         if base_url:
             resolved_base = base_url.rstrip("/")
         elif env_base:
@@ -170,7 +170,7 @@ class LlmConfig:
         else:
             resolved_base = "https://api.openai.com/v1"
         default_model = "deepseek-chat" if "deepseek" in resolved_base else "gpt-4o-mini"
-        resolved_model = model or os.environ.get("SUBMATRIX_LLM_MODEL") or default_model
+        resolved_model = model or os.environ.get("CUESMITH_LLM_MODEL") or default_model
         return cls(base_url=resolved_base, api_key=resolved_key, model=resolved_model)
 
     @property
@@ -208,7 +208,7 @@ class Translator(Protocol):
 
 
 _HTTP_LOCAL = threading.local()
-_HTTP_KEY = "_submatrix_http_connection"
+_HTTP_KEY = "_cuesmith_http_connection"
 
 
 def _drop_connection() -> None:
@@ -353,7 +353,7 @@ class CommandTranslator:
         tgt: str,
         hints: TranslateHints | None = None,
     ) -> list[str]:
-        with tempfile.TemporaryDirectory(prefix="submatrix-mt-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="cuesmith-mt-") as tmp:
             input_path = Path(tmp) / "input.json"
             output_path = Path(tmp) / "output.json"
             input_path.write_text(json.dumps(list(texts), ensure_ascii=False), encoding="utf-8")
@@ -388,7 +388,7 @@ class OpenAITranslator:
     ) -> None:
         if not config.api_key:
             raise TranslateError(
-                "openai 渠道需要 API key：设置环境变量 SUBMATRIX_LLM_API_KEY（或 OPENAI_API_KEY），"
+                "openai 渠道需要 API key：设置环境变量 CUESMITH_LLM_API_KEY（或 OPENAI_API_KEY），"
                 "或用 --provider microsoft"
             )
         self._config = config
@@ -662,7 +662,7 @@ class ResilientTranslator:
 
 
 def _provider_name(options: TranslateOptions) -> str:
-    return (options.provider or os.environ.get("SUBMATRIX_TRANSLATE_PROVIDER") or "microsoft").lower()
+    return (options.provider or os.environ.get("CUESMITH_TRANSLATE_PROVIDER") or "microsoft").lower()
 
 
 def _fallback_chain(
@@ -686,7 +686,7 @@ def _fallback_chain(
 
 
 def build_translator(options: TranslateOptions) -> Translator:
-    provider = (options.provider or os.environ.get("SUBMATRIX_TRANSLATE_PROVIDER") or "microsoft").lower()
+    provider = (options.provider or os.environ.get("CUESMITH_TRANSLATE_PROVIDER") or "microsoft").lower()
     if provider == "microsoft":
         return MicrosoftTranslator(
             transport=options.transport,
@@ -1086,7 +1086,7 @@ class TranslateResult:
 
 
 def _profile(code: str):
-    """语言 profile（阈值唯一真相源在 :mod:`submatrix.langs`）；错误按翻译层契约抛。"""
+    """语言 profile（阈值唯一真相源在 :mod:`cuesmith.langs`）；错误按翻译层契约抛。"""
 
     try:
         return lang_profile(code)
@@ -1724,7 +1724,7 @@ def _translate_report(
     size, digest = file_digest(Path(options.src))
     return {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "translate",
         "generated_at": generated_at.isoformat(),

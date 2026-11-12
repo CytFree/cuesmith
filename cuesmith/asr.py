@@ -118,7 +118,7 @@ _ASR_PYTHON = Requirement(
     label="faster-whisper",
     module="faster_whisper",
     parameter="--asr-python",
-    env_var="SUBMATRIX_ASR_PYTHON",
+    env_var="CUESMITH_ASR_PYTHON",
     hint="例如 spike/pyvideotrans/.venv/Scripts/python.exe（或自建 venv 后用 --asr-python 指过去）。",
 )
 
@@ -223,7 +223,7 @@ def find_model(explicit: str | None) -> str:
         return explicit
 
     candidates = [
-        os.environ.get("SUBMATRIX_ASR_MODEL"),
+        os.environ.get("CUESMITH_ASR_MODEL"),
         str(models["small"]),
         str(root / "spike" / "whisper-models" / "models--Systran--faster-whisper-small"),
         str(root / "models" / "faster-whisper-small"),
@@ -570,7 +570,7 @@ def _write_outputs(session: _AsrSession) -> AsrResult:
     generated_at = options.generated_at or datetime.now().astimezone()
     report: dict[str, object] = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "asr",
         "generated_at": generated_at.isoformat(),

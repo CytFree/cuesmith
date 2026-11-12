@@ -19,14 +19,14 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import dub as dub_module
-from submatrix.dub import (
+from cuesmith import dub as dub_module
+from cuesmith.dub import (
     DubError,
     DubOptions,
     build_engine,
     run_dub,
 )
-from submatrix.tts import CommandTtsEngine, EdgeTtsEngine, TtsError, parse_rate
+from cuesmith.tts import CommandTtsEngine, EdgeTtsEngine, TtsError, parse_rate
 from tests.support import FFMPEG, FFPROBE, build_test_video, requires_media_tools
 
 pytestmark = requires_media_tools
@@ -37,7 +37,7 @@ def _no_local_tts_fallback(monkeypatch) -> None:
     """本文件只验 Edge 引擎的编排契约：把"本地 TTS"钉死成**不可用**。
 
     为什么需要：OPT-11 起 ``DubOptions.tts_fallback`` 默认 ``"local"``，Edge 失败的条目
-    会调**真的**本地模型兜底（[dub.py](../../submatrix/dub.py) 里 `ensure_local_info()`）。
+    会调**真的**本地模型兜底（[dub.py](../../cuesmith/dub.py) 里 `ensure_local_info()`）。
     于是"引擎失败 → 记 failed / status=partial"这类用例，在装了 ``spike/local-tts`` 的
     机器上会变成"失败被兜底救回 → failed=0、status=ok"，**结论随机器环境飘**
     （本机 5 个本地模型常驻，曾让 4 个用例长期红）。
@@ -704,7 +704,7 @@ def test_build_engine_defaults_to_edge(tmp_path) -> None:
 
 
 def test_build_engine_auto_detects_edge_tts_python(tmp_path, monkeypatch) -> None:
-    import submatrix.dub as dub_module
+    import cuesmith.dub as dub_module
 
     monkeypatch.setattr(dub_module, "_default_edge_tts_python", lambda: r"C:\tts\python.exe")
     engine = build_engine(DubOptions(srt=tmp_path / "a.srt", out=tmp_path / "o"))
@@ -714,7 +714,7 @@ def test_build_engine_auto_detects_edge_tts_python(tmp_path, monkeypatch) -> Non
 
 
 def test_build_engine_explicit_tts_python_wins(tmp_path, monkeypatch) -> None:
-    import submatrix.dub as dub_module
+    import cuesmith.dub as dub_module
 
     monkeypatch.setattr(dub_module, "_default_edge_tts_python", lambda: "auto-python")
     engine = build_engine(

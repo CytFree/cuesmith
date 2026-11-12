@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.probe import (
+from cuesmith.probe import (
     GRAPHIC_SUBTITLE_CODECS,
     TEXT_SUBTITLE_CODECS,
     MediaProbe,

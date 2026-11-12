@@ -5,7 +5,7 @@
 | 日期 | 2026-10-21 |
 | 状态 | ✅ 完成（M2 交付：探测 + 路由判定 + 内封字幕直出 + manifest.json） |
 | 对应需求 | `视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md` §3 FR-1、AC-1 / AC-2 / AC-3 |
-| 代码 | `submatrix/probe.py`（+ `cli.py` 的 `probe` 子命令），全项目 1444 行 |
+| 代码 | `cuesmith/probe.py`（+ `cli.py` 的 `probe` 子命令），全项目 1444 行 |
 | 测试 | **66 个 M2 用例**（全项目 178 passed），含真 ffmpeg 造片、真 MKV 抽取、**真实 PGS / VobSub 位图字幕** |
 | 实测产物 | `work/m2-demo/s1`（真实 MKV 抽出 6 条）、`s2` `s3` `vtv`（均正确路由到 ASR） |
 
@@ -16,7 +16,7 @@
 ## 1. 用法
 
 ```powershell
-python -m submatrix probe --src spike\samples\S1_softsub.mkv --out work\m2-demo\s1
+python -m cuesmith probe --src spike\samples\S1_softsub.mkv --out work\m2-demo\s1
 ```
 
 真实输出：
@@ -66,7 +66,7 @@ python -m submatrix probe --src spike\samples\S1_softsub.mkv --out work\m2-demo\
 
 ```json
 {
-  "schema_version": 1, "tool": "submatrix", "command": "probe",
+  "schema_version": 1, "tool": "cuesmith", "command": "probe",
   "status": "extracted",
   "input": {"path": "...\\S1_softsub.mkv", "bytes": 400941,
             "sha256": "9a5b36cd…", "format_name": "matroska,webm", "duration_s": 41.332},

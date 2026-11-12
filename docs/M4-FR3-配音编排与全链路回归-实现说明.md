@@ -5,7 +5,7 @@
 | 日期 | 2026-10-21 |
 | 状态 | ✅ 完成（M4 交付：句级合并 + 并发配音 / 重试 / 时长报告 / 溢出吸收 + 一键回归） |
 | 对应需求 | `视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md` §3 FR-3、AC-7 / AC-8 / AC-9 / AC-13 / AC-14 |
-| 代码 | `submatrix/merge.py`、`submatrix/tts.py`、`submatrix/dub.py`、`tools/run_samples.py` |
+| 代码 | `cuesmith/merge.py`、`cuesmith/tts.py`、`cuesmith/dub.py`、`tools/run_samples.py` |
 | 测试 | **全项目 275 passed**（M4 新增 merge 23 + dub 19） |
 | 实测产物 | `work/m4-demo/`（merge / 真 Edge-TTS 配音 / AIGC 打标 / 100 条压测）、`work/regression/`（11 项回归） |
 
@@ -17,9 +17,9 @@
 
 | 文件 | 职责 |
 |---|---|
-| `submatrix/merge.py` | ASR 句级合并（按句末标点切句 / 单条 ≤12s / 间隔 ≤1s） |
-| `submatrix/tts.py` | TTS 引擎适配层（Edge-TTS 子进程 / 外部命令模板） |
-| `submatrix/dub.py` | 编排：并发合成 → 重试 → 时长校验 → atempo → PCM 铺轨 → mux |
+| `cuesmith/merge.py` | ASR 句级合并（按句末标点切句 / 单条 ≤12s / 间隔 ≤1s） |
+| `cuesmith/tts.py` | TTS 引擎适配层（Edge-TTS 子进程 / 外部命令模板） |
+| `cuesmith/dub.py` | 编排：并发合成 → 重试 → 时长校验 → atempo → PCM 铺轨 → mux |
 | `tools/run_samples.py` | 一键回归：路由 10 样本 + 合并 + 长视频 + 竖屏 + 全链路 + 可选真引擎，共 18 项 |
 | `tools/make_extra_samples.py` | 自动生成边界样本：竖屏 9:16 / 静音 / 1 小时 600 条字幕 |
 
@@ -29,10 +29,10 @@
 
 ```powershell
 # 1) 句级合并（ASR 碎片 → 句子）
-python -m submatrix merge --src asr.srt --out work\task\merge
+python -m cuesmith merge --src asr.srt --out work\task\merge
 
 # 2) 配音（默认 Edge-TTS；--tts-python 指向已装 edge-tts 的解释器）
-python -m submatrix dub --srt en.srt --video 成品.mp4 --out work\task\dub `
+python -m cuesmith dub --srt en.srt --video 成品.mp4 --out work\task\dub `
   --voice en-US-AriaNeural --concurrency 6 --retries 2 --tempo-limit 1.3 `
   --tts-python "spike\pyvideotrans\.venv\Scripts\python.exe"
 
@@ -279,11 +279,11 @@ manifest  merge.json report.json dub_report.json mark.json
 ```
 
 ```powershell
-python -m submatrix probe --src 素材.mkv --out work\t\probe         # 内封字幕？or 需 ASR
-python -m submatrix merge --src asr.srt --out work\t\merge          # 碎片→句子
-python -m submatrix build --src zh.srt --tgt en.srt --out work\t\sub # 5 格式 + CPS 校验
-python -m submatrix dub   --srt en.srt --video 素材.mp4 --out work\t\dub
-python -m submatrix mark  --src work\t\dub\dubbed.mp4 --out work\t\final
+python -m cuesmith probe --src 素材.mkv --out work\t\probe         # 内封字幕？or 需 ASR
+python -m cuesmith merge --src asr.srt --out work\t\merge          # 碎片→句子
+python -m cuesmith build --src zh.srt --tgt en.srt --out work\t\sub # 5 格式 + CPS 校验
+python -m cuesmith dub   --srt en.srt --video 素材.mp4 --out work\t\dub
+python -m cuesmith mark  --src work\t\dub\dubbed.mp4 --out work\t\final
 ```
 
 | 阶段 | 底线（不通过就退出码 2） |

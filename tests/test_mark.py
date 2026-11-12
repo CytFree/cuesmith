@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.mark import (
+from cuesmith.mark import (
     DEFAULT_COMMENT,
     DEFAULT_LABEL,
     DEFAULT_POSITION,

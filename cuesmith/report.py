@@ -120,7 +120,7 @@ def build_report(
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "build",
         "generated_at": generated_at.isoformat(),

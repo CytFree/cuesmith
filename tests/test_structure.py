@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PKG = ROOT / "submatrix"
+PKG = ROOT / "cuesmith"
 MODULES = {path.stem: path for path in sorted(PKG.glob("*.py"))}
 WORKER_MODULES = {name for name in MODULES if name.endswith("_worker")}
 
@@ -155,7 +155,7 @@ def internal_deps(name: str) -> set[str]:
 def all_modules_present() -> None:
     missing = set(EXPECTED_EDGES) ^ set(MODULES)
     assert not missing, (
-        f"EXPECTED_EDGES 与 submatrix/ 下的模块对不上：{sorted(missing)}"
+        f"EXPECTED_EDGES 与 cuesmith/ 下的模块对不上：{sorted(missing)}"
         "（新增/删除模块时同步更新本表与 docs/代码规范.md §1.1）"
     )
 

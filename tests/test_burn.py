@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.burn import BurnError, BurnOptions, run_burn
-from submatrix.export import dump_ass_single
-from submatrix.srt import Cue, Subtitle, Timing, dump_srt, load_srt
+from cuesmith.burn import BurnError, BurnOptions, run_burn
+from cuesmith.export import dump_ass_single
+from cuesmith.srt import Cue, Subtitle, Timing, dump_srt, load_srt
 from tests.support import build_test_video, requires_media_tools
 
 pytestmark = requires_media_tools

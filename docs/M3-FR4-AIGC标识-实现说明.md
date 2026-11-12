@@ -6,7 +6,7 @@
 | 状态 | ✅ 完成（M3 交付：显式烧帧标识 + 隐式元数据 + 自动核验 + 自用留痕） |
 | 对应需求 | `视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md` §3 FR-4、AC-10 / AC-11 / AC-12 |
 | 法规依据 | 《人工智能生成合成内容标识办法》（国信办通字〔2025〕2 号，**2025-09-01 已施行**） |
-| 代码 | `submatrix/mark.py`（+ `cli.py` 的 `mark` 子命令），全项目 2001 行 |
+| 代码 | `cuesmith/mark.py`（+ `cli.py` 的 `mark` 子命令），全项目 2001 行 |
 | 测试 | **55 个 M3 用例**（全项目 233 passed），含真 ffmpeg 烧帧 / 元数据回读 / 像素核验 |
 | 实测产物 | `work/m3-demo/vtv/`（对 M0 真机成品 42.02s 视频打标） |
 
@@ -17,7 +17,7 @@
 ## 1. 用法
 
 ```powershell
-python -m submatrix mark --src work\vtv\S3_no_sub.mp4 --out work\m3-demo\vtv
+python -m cuesmith mark --src work\vtv\S3_no_sub.mp4 --out work\m3-demo\vtv
 ```
 
 真实输出（对 M0 真机成品打标）：
@@ -37,7 +37,7 @@ python -m submatrix mark --src work\vtv\S3_no_sub.mp4 --out work\m3-demo\vtv
 | `--label-text` | `AI 生成` | 显式标识文案 |
 | `--label-seconds` | `3` | 标识持续时长；**< 3 秒直接拒绝** |
 | `--position` | `top-right` | `top-right`/`top-left`/`bottom-right`/`bottom-left` |
-| `--provider` | `submatrix` | 服务提供者名称 → 写 `artist`，并作为 `copyright` 默认值 |
+| `--provider` | `cuesmith` | 服务提供者名称 → 写 `artist`，并作为 `copyright` 默认值 |
 | `--comment` | `AI 生成内容：AI 翻译 + AI 配音` | 生成合成属性说明 |
 | `--copyright` | 同 `--provider` | 版权/提供者信息 |
 | `--font-file` | 自动（雅黑→雅黑粗→黑体→宋体） | 指定中文字体 |

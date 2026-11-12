@@ -5,7 +5,7 @@ CPS / 行宽都必须在"真正显示出来的字符"上计算，否则 <i> 或 
 
 from __future__ import annotations
 
-from submatrix.textutil import char_count, split_text_lines, visible_text
+from cuesmith.textutil import char_count, split_text_lines, visible_text
 
 
 def test_visible_text_strips_ass_override_tags() -> None:

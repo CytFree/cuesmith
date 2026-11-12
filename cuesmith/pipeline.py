@@ -206,7 +206,7 @@ class PipelineOptions:
     mark: bool = True
     force: bool = False
     stop_after: str | None = None
-    pricing: str | None = None  # 成本价表 JSON（默认用 submatrix/cost.py 内置示例价）
+    pricing: str | None = None  # 成本价表 JSON（默认用 cuesmith/cost.py 内置示例价）
     llm_config: LlmConfig | None = None
     generated_at: datetime | None = None
 
@@ -623,7 +623,7 @@ class _Run:
         size, digest = file_digest(self.source)
         report: dict[str, object] = {
             "schema_version": 1,
-            "tool": "submatrix",
+            "tool": "cuesmith",
             "version": __version__,
             "command": "pipeline",
             "generated_at": self.started_at.isoformat(),
@@ -2059,7 +2059,7 @@ def _remap_speaker_assignments(
     assignments = smooth_speakers(assign_speakers(timings, turns), timings)
     payload = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "srt": str(target_srt.resolve()),
         "speakers": sorted({speaker for speaker in assignments if speaker}),

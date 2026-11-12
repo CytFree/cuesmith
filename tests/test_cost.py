@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.cli import main
-from submatrix.cost import (
+from cuesmith.cli import main
+from cuesmith.cost import (
     DEFAULT_PRICING,
     CostError,
     build_cost,

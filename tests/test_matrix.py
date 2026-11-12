@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.cli import main
-from submatrix.matrix import MatrixOptions, run_matrix
-from submatrix.srt import dump_srt, parse_srt
-from submatrix.validate import Limits
+from cuesmith.cli import main
+from cuesmith.matrix import MatrixOptions, run_matrix
+from cuesmith.srt import dump_srt, parse_srt
+from cuesmith.validate import Limits
 
 NOW = datetime(2026, 10, 20, 18, 0, 0, tzinfo=timezone(timedelta(hours=8)))
 
@@ -114,7 +114,7 @@ def test_report_schema_and_status_ok(tmp_path) -> None:
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
 
     assert report["schema_version"] == 1
-    assert report["tool"] == "submatrix"
+    assert report["tool"] == "cuesmith"
     assert report["command"] == "build"
     assert report["status"] == "ok"
     assert report["generated_at"] == NOW.isoformat()

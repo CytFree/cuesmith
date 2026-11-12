@@ -1,4 +1,4 @@
-"""submatrix —— 视频字幕矩阵工具。
+"""cuesmith —— 视频字幕矩阵工具。
 
 自建薄层，只依赖标准库 + ffmpeg；底座（pyVideoTrans）通过进程边界调用。
 """

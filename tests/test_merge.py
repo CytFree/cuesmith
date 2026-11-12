@@ -15,14 +15,14 @@ import json
 
 import pytest
 
-from submatrix.merge import (
+from cuesmith.merge import (
     MergeError,
     MergeOptions,
     merge_cues,
     merge_cues_with_speakers,
     run_merge,
 )
-from submatrix.srt import Cue, Subtitle, Timing, load_srt
+from cuesmith.srt import Cue, Subtitle, Timing, load_srt
 
 
 def sub(*pairs: tuple[int, int, str]) -> Subtitle:
@@ -251,8 +251,8 @@ def test_merged_cues_never_have_zero_duration() -> None:
 
 
 def test_run_merge_writes_srt_and_report(tmp_path) -> None:
-    from submatrix.report import file_digest
-    from submatrix.srt import dump_srt
+    from cuesmith.report import file_digest
+    from cuesmith.srt import dump_srt
 
     src = tmp_path / "source.srt"
     src.write_text(

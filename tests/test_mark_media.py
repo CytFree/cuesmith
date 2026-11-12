@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.cli import main
-from submatrix.mark import (
+from cuesmith.cli import main
+from cuesmith.mark import (
     DEFAULT_COMMENT,
     METADATA_FIELDS,
     MarkError,
@@ -153,7 +153,7 @@ def test_ac11_metadata_is_readable_by_ffprobe(short_video, tmp_path) -> None:
         assert tags.get(field) == value, f"{field} 应可被 ffprobe 读出"
 
     assert tags["comment"] == DEFAULT_COMMENT
-    assert tags["artist"] == "submatrix"
+    assert tags["artist"] == "cuesmith"
 
 
 def test_ac11_content_id_is_actually_inside_the_container(short_video, tmp_path) -> None:

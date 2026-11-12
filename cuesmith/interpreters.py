@@ -70,7 +70,7 @@ class Requirement:
     label: str  # 人类可读："faster-whisper"
     module: str  # import 探针用："faster_whisper"
     parameter: str  # CLI 参数："--asr-python"
-    env_var: str = ""  # 环境变量："SUBMATRIX_ASR_PYTHON"
+    env_var: str = ""  # 环境变量："CUESMITH_ASR_PYTHON"
     hint: str = ""  # 额外怎么装/建 venv 的提示
 
 

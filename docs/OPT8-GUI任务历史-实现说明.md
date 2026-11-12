@@ -13,14 +13,14 @@ GUI 每次运行（批量里每条视频算一条）都会把**源文件 / 输�
 
 ---
 
-## 2. 数据层：`submatrix/history.py`（新模块，纯标准库）
+## 2. 数据层：`cuesmith/history.py`（新模块，纯标准库）
 
 ### 2.1 存储位置
 
 | 优先级 | 路径 |
 |---|---|
 | 显式 `--db` | 任意 |
-| 环境变量 `SUBMATRIX_HISTORY_DB` | 任意 |
+| 环境变量 `CUESMITH_HISTORY_DB` | 任意 |
 | 默认 | `work/history.db`（仓库内，不进分发） |
 
 ### 2.2 表结构（`tasks`）
@@ -33,7 +33,7 @@ GUI 每次运行（批量里每条视频算一条）都会把**源文件 / 输�
 | `status` | `running` / `ok` / `partial` / `failed` / `cancelled` |
 | `exit_code` | pipeline 退出码（0/2/1…） |
 | `settings` | GUI 表单参数 JSON（src_lang/tgt_lang/features/voice/speakers/extra_args/…） |
-| `argv` | **实际执行的 pipeline 参数**（`["-m","submatrix","pipeline",…]`），重跑按它原样执行 |
+| `argv` | **实际执行的 pipeline 参数**（`["-m","cuesmith","pipeline",…]`），重跑按它原样执行 |
 | `cost` | `pipeline.json` 的 cost 块（含 display 金额） |
 | `stages` | 逐阶段状态 `{probe: ok, diarize: ok, …}` |
 | `speakers` | 说话人数（多人声时） |
@@ -82,10 +82,10 @@ GUI 每次运行（批量里每条视频算一条）都会把**源文件 / 输�
 不开页面也能查/清理（便于对账与自动化）：
 
 ```powershell
-python -m submatrix history --limit 20                 # 表格
-python -m submatrix history --json                    # JSON
-python -m submatrix history --delete 7                # 删一条记录（不动产物）
-python -m submatrix history --db D:\tmp\history.db    # 指定库
+python -m cuesmith history --limit 20                 # 表格
+python -m cuesmith history --json                    # JSON
+python -m cuesmith history --delete 7                # 删一条记录（不动产物）
+python -m cuesmith history --db D:\tmp\history.db    # 指定库
 ```
 
 ---
@@ -103,7 +103,7 @@ python -m submatrix history --db D:\tmp\history.db    # 指定库
 | 「刷新」 | 返回 **7 行表格 / 7 个下拉选项** + "共 7 条记录 · 数据库 …\work\history.db" |
 | 「载入参数到表单」 | 返回 "已载入任务 #6（S1_softsub.mkv）；点「开始」按原参数重跑" |
 | 服务器重启 | 重启前后记录都在（第一次 e2e 的 #1 在重启后仍被列出），证明是落盘而不是内存 |
-| 停服务器后 CLI | `python -m submatrix history --limit 10` → **7 条记录**（含状态/成本/用时），`--json` 可机读 |
+| 停服务器后 CLI | `python -m cuesmith history --limit 10` → **7 条记录**（含状态/成本/用时），`--json` 可机读 |
 
 证据：`work/gui-opt8-e2e/report.json`、`work/history.db`、`work/gui-opt8-e2e/run/pipeline.json`。
 
@@ -134,14 +134,14 @@ python -m submatrix history --db D:\tmp\history.db    # 指定库
 
 ```powershell
 # 1) 启动 GUI（仓库自带 gradio venv）
-spike\gui\.venv\Scripts\python.exe -m submatrix gui --port 7865 --no-browser
+spike\gui\.venv\Scripts\python.exe -m cuesmith gui --port 7865 --no-browser
 
 # 2) 另开一个终端跑真实 HTTP 验证（跑完打印报告）
 spike\gui\.venv\Scripts\python.exe tools\gui_history_real.py --port 7865
 
 # 3) 停掉服务器后，用 CLI 看落盘记录
-python -m submatrix history --limit 10
-python -m submatrix history --json
+python -m cuesmith history --limit 10
+python -m cuesmith history --json
 ```
 
 产物：`work/gui-opt8-e2e/report.json`（run/rerun/refresh/load 全链路结果）、`work/history.db`。

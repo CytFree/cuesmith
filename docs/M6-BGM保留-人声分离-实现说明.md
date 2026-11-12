@@ -1,6 +1,6 @@
 # M6 — 保留背景音乐（人声分离 + 侧链混音）
 
-> 状态：**已完成**。新增 `submatrix/bgm.py`、`dub --keep-bgm` 与 `tests/test_bgm.py`（16 项）；
+> 状态：**已完成**。新增 `cuesmith/bgm.py`、`dub --keep-bgm` 与 `tests/test_bgm.py`（16 项）；
 > 一键回归新增"全链路/保留BGM"检查。触发原因：用户要求"BGM 这个也要做"——
 > 收费配音软件的成片不会在没人说话时变成死寂，这是交付质感的分水岭。
 >
@@ -33,9 +33,9 @@ dub --keep-bgm
    └─ 成片 mux：视频流 copy + 混音轨 aac
 ```
 
-主包 `submatrix` **不 import torch / demucs**，只在需要时：
+主包 `cuesmith` **不 import torch / demucs**，只在需要时：
 
-1. `find_demucs_python()` 逐个探测候选解释器（显式参数 → `SUBMATRIX_DEMUCS_PYTHON`
+1. `find_demucs_python()` 逐个探测候选解释器（显式参数 → `CUESMITH_DEMUCS_PYTHON`
    → 项目内 `spike/demucs/.venv` → 当前解释器），用 `import demucs` 判断可用（毫秒级）；
 2. 找不到时按模式降级（`auto` → 相位抵消；`separate` → 明确报错）；
 3. 分离结果按文件名契约找 `no_vocals.wav`，不解析 demucs 的日志。
@@ -111,7 +111,7 @@ uv pip install --python spike\demucs\.venv\Scripts\python.exe demucs soundfile "
 |---|---|---|
 | torch 2.7.1+cpu 在本 venv 里 | `OSError [WinError 1114]` 加载 `c10.dll` 失败 | 降到 **torch 2.2.2 + torchaudio 2.2.2**（与 demucs 4.1.0 组合稳定） |
 | numpy 2.x | 运行时报 `Numpy is not available`（torch 2.2 是按 numpy 1.x ABI 编的） | 固定 **numpy 1.26.4** |
-| 模型权重落 `%USERPROFILE%\.cache\torch` | 该目录 PermissionError，且不在项目内 | 调用时设 `TORCH_HOME=spike\demucs\.torch`（可用 `SUBMATRIX_TORCH_HOME` 覆盖） |
+| 模型权重落 `%USERPROFILE%\.cache\torch` | 该目录 PermissionError，且不在项目内 | 调用时设 `TORCH_HOME=spike\demucs\.torch`（可用 `CUESMITH_TORCH_HOME` 覆盖） |
 
 模型权重 `htdemucs` 首次运行自动从 `dl.fbaipublicfiles.com` 下载（本机实测可达，
 GitHub 被墙不影响），约 80MB，之后离线可用。

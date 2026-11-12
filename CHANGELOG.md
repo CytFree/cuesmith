@@ -35,13 +35,16 @@
 
 ### 变更
 
+- **项目改名**：`submatrix` → `cuesmith`（中文名「字幕工坊」）。包名、CLI 命令
+  （`python -m cuesmith` / `cuesmith`）、PyPI 名、环境变量前缀（`SUBMATRIX_*` →
+  `CUESMITH_*`）一并改掉；这是公开发布前的改名，不提供旧名兼容。
 - 编排层统一成"状态对象 + 阶段函数"：`run_pipeline` 857→22、`run_dub` 692→32、
   `run_translate` 299→12、`run_diarize` 327→13、`run_asr` 168→10、`run_mark` 192→17、
   `run_burn` 171→10、`_stage_diarize` 159→45 行。
 - 外部工具调用收敛到三个接缝：`media`（ffmpeg/ffprobe）、`interpreters`（找解释器）、
   `worker_protocol`（常驻 worker 的 JSON 行协议）。
 - 报告取段统一走 `report.section()`；`# type: ignore` 从 57 处清零。
-- 产物写入改成原子写（`submatrix.atomic`：临时文件 + `os.replace`）。
+- 产物写入改成原子写（`cuesmith.atomic`：临时文件 + `os.replace`）。
 - 文案/文档：除 `README.md` 与 `AGENTS.md` 外，文档统一放 `docs/`。
 
 ### 修复

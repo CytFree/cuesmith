@@ -1,6 +1,6 @@
 """OPT-8 真实验证：GUI 跑一条 → 历史库落记录 → 重跑 → 重启后 CLI 仍可查。
 
-需要一个已经启动的 GUI（`python -m submatrix gui --port 7865 --no-browser`）：
+需要一个已经启动的 GUI（`python -m cuesmith gui --port 7865 --no-browser`）：
 
     spike\\gui\\.venv\\Scripts\\python tools\\gui_history_real.py --port 7865
 
@@ -21,7 +21,7 @@ if str(ROOT) not in sys.path:
 
 from gradio_client import Client  # noqa: E402
 
-from submatrix.history import (  # noqa: E402
+from cuesmith.history import (  # noqa: E402
     HistoryStore,
     history_rows,
     task_choice_label,

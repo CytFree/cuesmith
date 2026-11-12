@@ -49,7 +49,7 @@ def _save_map(path: Path, mapping: dict[str, str]) -> None:
 
 def _clean_prefix(raw: str) -> str:
     cleaned = "".join(char for char in raw if char.isascii() and char.isalnum())[:10]
-    return cleaned or "submatrix"
+    return cleaned or "cuesmith"
 
 
 def main(argv: list[str] | None = None) -> int:

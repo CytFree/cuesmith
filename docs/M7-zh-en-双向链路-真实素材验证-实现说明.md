@@ -122,7 +122,7 @@ curl.exe -L -C - --retry 5 -o "$dir\model.bin" ($base + 'model.bin')   # -C - �
 | HF 镜像 | `https://hf-mirror.com/Systran/faster-whisper-medium/resolve/main/<文件>` | 可达但限速；hub 客户端撞 308，用 curl 手动下 |
 
 文件清单：`model.bin` **1,527,906,378** / `config.json` 2,257 / `tokenizer.json` 2,203,239 / `vocabulary.txt` 459,861。
-放好目录后 `--model medium` 直接用（`submatrix/asr.py` 已做名称→本地目录映射，不联网、不下载）。
+放好目录后 `--model medium` 直接用（`cuesmith/asr.py` 已做名称→本地目录映射，不联网、不下载）。
 
 ---
 

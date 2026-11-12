@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from submatrix.tts import (
+from cuesmith.tts import (
     BASE_SPEECH_CPS,
     find_edge_tts_python,
     format_rate,
@@ -28,13 +28,13 @@ def test_explicit_python_wins_without_probing(monkeypatch) -> None:
 
 
 def test_env_override(monkeypatch) -> None:
-    monkeypatch.setenv("SUBMATRIX_TTS_PYTHON", "env-python")
+    monkeypatch.setenv("CUESMITH_TTS_PYTHON", "env-python")
 
     assert find_edge_tts_python(candidates=["other"], probe=lambda python: True) == "env-python"
 
 
 def test_probe_picks_first_importable(monkeypatch) -> None:
-    monkeypatch.delenv("SUBMATRIX_TTS_PYTHON", raising=False)
+    monkeypatch.delenv("CUESMITH_TTS_PYTHON", raising=False)
     attempts: list[str] = []
 
     def probe(python: str) -> bool:
@@ -48,7 +48,7 @@ def test_probe_picks_first_importable(monkeypatch) -> None:
 
 
 def test_falls_back_to_current_interpreter(monkeypatch) -> None:
-    monkeypatch.delenv("SUBMATRIX_TTS_PYTHON", raising=False)
+    monkeypatch.delenv("CUESMITH_TTS_PYTHON", raising=False)
 
     assert find_edge_tts_python(candidates=["bad"], probe=lambda python: False) == sys.executable
 

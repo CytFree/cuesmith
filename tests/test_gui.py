@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import gui
-from submatrix.cli import build_parser
+from cuesmith import gui
+from cuesmith.cli import build_parser
 
 # ---------------------------------------------------------------- 参数映射
 
@@ -21,7 +21,7 @@ from submatrix.cli import build_parser
 def test_build_argv_defaults_to_dub_burn_mark() -> None:
     argv = gui.build_argv("in.mp4", "out", src_lang="en", tgt_lang="zh")
 
-    assert argv[:3] == ["-m", "submatrix", "pipeline"]
+    assert argv[:3] == ["-m", "cuesmith", "pipeline"]
     assert argv[argv.index("--src") + 1] == "in.mp4"
     assert argv[argv.index("--out") + 1] == "out"
     assert argv[argv.index("--src-lang") + 1] == "en"
@@ -105,10 +105,10 @@ def test_build_argv_rejects_bad_extra_args() -> None:
 
 
 def test_resolve_sources_multiline_and_dedupe(monkeypatch, tmp_path: Path) -> None:
-    env_var = "SUBMATRIX_TEST_VIDEO"
+    env_var = "CUESMITH_TEST_VIDEO"
     monkeypatch.setenv(env_var, str(tmp_path / "env.mp4"))
 
-    sources = gui.resolve_sources(f"$SUBMATRIX_TEST_VIDEO\n{tmp_path / 'b.mp4'}\n\n", None)
+    sources = gui.resolve_sources(f"$CUESMITH_TEST_VIDEO\n{tmp_path / 'b.mp4'}\n\n", None)
 
     assert sources == [str(tmp_path / "env.mp4"), str(tmp_path / "b.mp4")]
 
@@ -569,7 +569,7 @@ def test_history_snapshot_without_store() -> None:
 
 
 def test_stream_run_writes_task_history(monkeypatch, tmp_path: Path) -> None:
-    from submatrix.history import HistoryStore
+    from cuesmith.history import HistoryStore
 
     FakePopen.commands.clear()
     monkeypatch.setattr(gui.subprocess, "Popen", _stage_popen())
@@ -593,7 +593,7 @@ def test_stream_run_writes_task_history(monkeypatch, tmp_path: Path) -> None:
     assert task["source"] == str(source) and task["out_dir"] == str(out)
     assert task["settings"]["src_lang"] == "zh"
     assert task["settings"]["features"] == ["dub", "mark"]
-    assert task["argv"][:3] == ["-m", "submatrix", "pipeline"]
+    assert task["argv"][:3] == ["-m", "cuesmith", "pipeline"]
     assert task["stages"]["dub"] == "ok"
     assert task["speakers"] == 2
     assert task["wall_s"] == 12.5
@@ -607,7 +607,7 @@ def test_stream_run_writes_task_history(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_stream_run_records_failed_task(monkeypatch, tmp_path: Path) -> None:
-    from submatrix.history import HistoryStore
+    from cuesmith.history import HistoryStore
 
     monkeypatch.setattr(gui.subprocess, "Popen", _stage_popen(exit_code=2))
     store = HistoryStore(tmp_path / "history.db")
@@ -624,7 +624,7 @@ def test_stream_run_records_failed_task(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_stream_rerun_uses_stored_argv(monkeypatch, tmp_path: Path) -> None:
-    from submatrix.history import HistoryStore
+    from cuesmith.history import HistoryStore
 
     FakePopen.commands.clear()
     monkeypatch.setattr(gui.subprocess, "Popen", _stage_popen())
@@ -666,7 +666,7 @@ def test_stream_rerun_uses_stored_argv(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_stream_rerun_requires_valid_selection(tmp_path: Path) -> None:
-    from submatrix.history import HistoryStore
+    from cuesmith.history import HistoryStore
 
     store = HistoryStore(tmp_path / "history.db")
 

@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.cli import main
-from submatrix.export import dump_ass
-from submatrix.probe import ExtractionError, ProbeOptions, run_probe
-from submatrix.srt import parse_srt
-from submatrix.textutil import visible_text
+from cuesmith.cli import main
+from cuesmith.export import dump_ass
+from cuesmith.probe import ExtractionError, ProbeOptions, run_probe
+from cuesmith.srt import parse_srt
+from cuesmith.textutil import visible_text
 from tests.support import FFMPEG, requires_ffmpeg
 
 pytestmark = requires_ffmpeg
@@ -208,7 +208,7 @@ def test_manifest_records_probe_and_decision(media, tmp_path) -> None:
     manifest = manifest_of(result)
 
     assert manifest["schema_version"] == 1
-    assert manifest["tool"] == "submatrix"
+    assert manifest["tool"] == "cuesmith"
     assert manifest["command"] == "probe"
     assert manifest["status"] == "extracted"
     assert manifest["input"]["bytes"] == (media / "softsub.mkv").stat().st_size

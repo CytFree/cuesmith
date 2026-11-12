@@ -13,10 +13,10 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import dub as dub_module
-from submatrix import localtts as localtts_module
-from submatrix.dub import DubError, DubOptions, run_dub
-from submatrix.tts import TtsError
+from cuesmith import dub as dub_module
+from cuesmith import localtts as localtts_module
+from cuesmith.dub import DubError, DubOptions, run_dub
+from cuesmith.tts import TtsError
 from tests.support import requires_media_tools
 
 pytestmark = requires_media_tools

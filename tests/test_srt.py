@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from submatrix.srt import (
+from cuesmith.srt import (
     Cue,
     SrtParseError,
     Subtitle,

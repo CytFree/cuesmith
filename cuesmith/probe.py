@@ -403,7 +403,7 @@ def build_manifest(
 
     return {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "probe",
         "generated_at": generated_at.isoformat(),

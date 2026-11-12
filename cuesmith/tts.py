@@ -140,7 +140,7 @@ _EDGE_TTS_PYTHON = Requirement(
     label="edge-tts",
     module="edge_tts",
     parameter="--tts-python",
-    env_var="SUBMATRIX_TTS_PYTHON",
+    env_var="CUESMITH_TTS_PYTHON",
     hint="或先建好 spike/.venv311 并 pip install edge-tts==7.3.1。",
 )
 
@@ -153,7 +153,7 @@ def find_edge_tts_python(
 ) -> str:
     """找第一个能 ``import edge_tts`` 的解释器；找不到退回当前解释器。
 
-    顺序：显式 ``--tts-python`` → 环境变量 ``SUBMATRIX_TTS_PYTHON`` →
+    顺序：显式 ``--tts-python`` → 环境变量 ``CUESMITH_TTS_PYTHON`` →
     当前解释器 → 仓库已知 venv（``spike/.venv311``、``pyvideotrans/.venv`` 等）。
     显式值与环境变量不做探测（尊重用户选择，真跑不通会在合成时报错）。
     """

@@ -50,7 +50,7 @@ __all__ = [
 DEFAULT_LABEL = "AI 生成"
 DEFAULT_SECONDS = 3.0
 DEFAULT_POSITION = "top-right"
-DEFAULT_PROVIDER = "submatrix"
+DEFAULT_PROVIDER = "cuesmith"
 DEFAULT_COMMENT = "AI 生成内容：AI 翻译 + AI 配音"
 # PRD 要求显式标识 ≥3 秒；低于这个值直接拒绝（比事后补救便宜）
 MIN_LABEL_SECONDS = 3.0
@@ -438,7 +438,7 @@ def _mark_self_use(session: _MarkSession) -> None:
     )
     notice = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "command": "mark",
         "mode": "self_use",
         "generated_at": session.generated_at.isoformat(),
@@ -547,7 +547,7 @@ def _write_outputs(session: _MarkSession) -> MarkResult:
     output_size, output_sha = file_digest(session.video_path)
     report: dict[str, object] = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "mark",
         "generated_at": session.generated_at.isoformat(),

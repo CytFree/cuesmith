@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from submatrix import atomic
+from cuesmith import atomic
 
 
 def test_write_text_replaces_content_without_leaving_temp(tmp_path) -> None:

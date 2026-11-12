@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
         sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(model), num_threads=2)
     )
-    temp_dir = Path(tempfile.mkdtemp(prefix="submatrix-voice-sim-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="cuesmith-voice-sim-"))
     results: list[dict[str, object]] = []
     try:
         reference_embeddings = {}

@@ -15,10 +15,10 @@ import urllib.error
 
 import pytest
 
-from submatrix import translate as translate_module
-from submatrix.glossary import Glossary, Term
-from submatrix.srt import Cue, Subtitle, Timing, dump_srt, load_srt
-from submatrix.translate import (
+from cuesmith import translate as translate_module
+from cuesmith.glossary import Glossary, Term
+from cuesmith.srt import Cue, Subtitle, Timing, dump_srt, load_srt
+from cuesmith.translate import (
     CommandTranslator,
     LlmConfig,
     MicrosoftTranslator,
@@ -30,7 +30,7 @@ from submatrix.translate import (
     normalize_cjk_spacing,
     run_translate,
 )
-from submatrix.tts import speech_capacity_cps
+from cuesmith.tts import speech_capacity_cps
 
 
 def write_srt(path, *cues: tuple[int, int, str]):
@@ -467,7 +467,7 @@ def test_openai_usage_is_accumulated() -> None:
 
 
 def test_llm_config_detects_deepseek(monkeypatch) -> None:
-    for name in ("SUBMATRIX_LLM_BASE_URL", "SUBMATRIX_LLM_API_KEY", "SUBMATRIX_LLM_MODEL", "OPENAI_API_KEY"):
+    for name in ("CUESMITH_LLM_BASE_URL", "CUESMITH_LLM_API_KEY", "CUESMITH_LLM_MODEL", "OPENAI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
 
@@ -643,7 +643,7 @@ def test_trim_is_flagged_for_human_review(tmp_path, monkeypatch) -> None:
 def test_cli_condense_is_on_by_default(tmp_path) -> None:
     """用户口径：auto 就是默认模式；要"一个字都不许少"才显式 --no-condense。"""
 
-    from submatrix.cli import build_parser
+    from cuesmith.cli import build_parser
 
     parser = build_parser()
     base = ["translate", "--src", "a.srt", "--out", "out"]
@@ -729,7 +729,7 @@ def test_clean_source_collapses_chinese_stutter_and_normalizes_punct() -> None:
 def test_english_target_gets_terminal_punctuation() -> None:
     """ASR 源文没句号时，英文译文每条都要有句末标点（源文逗号收尾的除外）。"""
 
-    from submatrix.translate import _ensure_en_terminal
+    from cuesmith.translate import _ensure_en_terminal
 
     assert _ensure_en_terminal("He wants to train the next Liu Xiang", continues=False) == (
         "He wants to train the next Liu Xiang."

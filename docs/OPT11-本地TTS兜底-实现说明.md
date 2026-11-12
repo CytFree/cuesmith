@@ -20,11 +20,11 @@
 
 | 文件 | 角色 |
 |---|---|
-| `submatrix/tts_worker.py`（新） | **常驻 worker**，唯一 `import sherpa_onnx` 的地方；stdin/stdout 逐行 JSON；启动加载模型（Kokoro / MeloTTS-VITS），支持逐条 `{text,out,voice,speed}`；单条失败不崩、EOF 退出 |
-| `submatrix/localtts.py`（新，纯标准库） | 主包侧引擎：找 sherpa 解释器/模型、判断类型（有 `voices.bin`→kokoro，有 `lexicon.txt`+`dict/`→vits）、`LocalTtsEngine.synthesize(text,out)`；**共享 worker registry**（同一模型只加载一次）、线程锁串行化、ready/响应超时、worker 死亡自动重启一次、`close_all_workers()` |
-| `submatrix/dub.py` | 新增 `tts_provider` / `tts_fallback` / `local_tts_*`；`build_engine` 按 provider 构造引擎；Edge 失败后逐条本地兜底；缓存指纹带 engine（Edge 的 mp3 与本地 wav 分开）；报告/告警/条目级 `provider`/`fallback` |
-| `submatrix/pipeline.py` | 透传配置；dub 缓存判据加入 `tts_provider` / `tts_fallback` / 本地模型指纹（换 provider 或换模型必重配，老 Edge 缓存仍兼容） |
-| `submatrix/cli.py` | `dub` / `pipeline` 新参数；摘要打印本地 provider/兜底条数 |
+| `cuesmith/tts_worker.py`（新） | **常驻 worker**，唯一 `import sherpa_onnx` 的地方；stdin/stdout 逐行 JSON；启动加载模型（Kokoro / MeloTTS-VITS），支持逐条 `{text,out,voice,speed}`；单条失败不崩、EOF 退出 |
+| `cuesmith/localtts.py`（新，纯标准库） | 主包侧引擎：找 sherpa 解释器/模型、判断类型（有 `voices.bin`→kokoro，有 `lexicon.txt`+`dict/`→vits）、`LocalTtsEngine.synthesize(text,out)`；**共享 worker registry**（同一模型只加载一次）、线程锁串行化、ready/响应超时、worker 死亡自动重启一次、`close_all_workers()` |
+| `cuesmith/dub.py` | 新增 `tts_provider` / `tts_fallback` / `local_tts_*`；`build_engine` 按 provider 构造引擎；Edge 失败后逐条本地兜底；缓存指纹带 engine（Edge 的 mp3 与本地 wav 分开）；报告/告警/条目级 `provider`/`fallback` |
+| `cuesmith/pipeline.py` | 透传配置；dub 缓存判据加入 `tts_provider` / `tts_fallback` / 本地模型指纹（换 provider 或换模型必重配，老 Edge 缓存仍兼容） |
+| `cuesmith/cli.py` | `dub` / `pipeline` 新参数；摘要打印本地 provider/兜底条数 |
 
 ---
 
@@ -36,10 +36,10 @@
 |---|---|---|
 | `--tts-provider edge\|local` | `edge` | 主渠道 |
 | `--tts-fallback local\|off` | `local` | Edge 失败是否本地兜底 |
-| `--local-tts-model PATH` | 自动找 | 默认候选 `spike/local-tts/kokoro-multi-lang-v1_0`、`spike/local-tts/vits-melo-tts-zh_en`；env `SUBMATRIX_LOCAL_TTS_MODEL` |
+| `--local-tts-model PATH` | 自动找 | 默认候选 `spike/local-tts/kokoro-multi-lang-v1_0`、`spike/local-tts/vits-melo-tts-zh_en`；env `CUESMITH_LOCAL_TTS_MODEL` |
 | `--local-tts-kind auto\|kokoro\|vits` | `auto` | 按目录特征自动判断 |
 | `--local-tts-voice` | 空 | Kokoro：`47` / `kokoro:47` / 名字（xiaoxiao…）；VITS：`0`；空=按目标语言默认（zh→47、en→3） |
-| `--local-tts-python` | 自动探测 | 装有 sherpa-onnx 的解释器（默认 `spike/diarization/.venv`）；env `SUBMATRIX_LOCAL_TTS_PYTHON` |
+| `--local-tts-python` | 自动探测 | 装有 sherpa-onnx 的解释器（默认 `spike/diarization/.venv`）；env `CUESMITH_LOCAL_TTS_PYTHON` |
 | `--local-tts-threads` | `8` | 推理线程 |
 | `--local-tts-speed` | `1.0` | 基础倍速（0.5–2.0），再乘 `--tts-rate`（如 `+20%` → 1.2） |
 | `--tgt-lang zh\|en` | `zh` | 仅 `dub` 单独用时用于挑本地默认音色；pipeline 自动用目标语言 |
@@ -106,11 +106,11 @@
 
 ```powershell
 # 纯本地（离线）
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\out --tts-provider local
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\out --tts-provider local
 # 或 pipeline
-python -m submatrix pipeline --src a.mp4 --out work\run --src-lang zh --tgt-lang en --tts-provider local
+python -m cuesmith pipeline --src a.mp4 --out work\run --src-lang zh --tgt-lang en --tts-provider local
 # 默认 Edge + 本地兜底（不传参数即是）；可显式写
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\out --tts-fallback local
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\out --tts-fallback local
 # worker 单测
 python -m pytest tests\test_localtts.py tests\test_dub_local.py -q
 ```
@@ -122,4 +122,4 @@ python -m pytest tests\test_localtts.py tests\test_dub_local.py -q
 | `work/opt11-fallback-dub/` | Edge 不可用 → 26 条本地兜底（events 26、成片 60s） |
 | `work/opt11-melo-dub/` | MeloTTS（44.1kHz）端到端 |
 | `work/real-samples/opt7b-pipe-zh-60s/` | pipeline 本地 provider（dub 27.3s、重跑 cached） |
-| `submatrix/tts_worker.py`、`submatrix/localtts.py`、`tests/test_localtts.py` | 实现与单测 |
+| `cuesmith/tts_worker.py`、`cuesmith/localtts.py`、`tests/test_localtts.py` | 实现与单测 |

@@ -179,12 +179,12 @@
 
 | 文件 | 改动 |
 |---|---|
-| `submatrix/diarize.py` | `DEFAULT_THRESHOLDS`、`default_threshold()`、`ClusterMerge`、`merge_minor_speakers()`；`DiarizeOptions.threshold=None` + `resolved_threshold` + `min_speaker_speech_s` / `min_speaker_share`；报告与告警 |
-| `submatrix/tts.py` | `BASE_SPEECH_CPS`、`parse_rate` / `format_rate` / `speech_cps` / `speech_capacity_cps` |
-| `submatrix/dub.py` | 两轮合成（首轮 + 提语速）、`rate_ladder` / `_choose_escalated_rate`、语速进缓存键/引擎键、`tempo_limit=1.4`、`played_ms` / `played_overflow_pct` / `fits_room` / `rate_escalated` |
-| `submatrix/translate.py` | `dub_cps_budget`、`_slot_budgets`（借用句间空隙）、精简预算取 `min`、`summary.dub_budget` |
-| `submatrix/pipeline.py` | `--keep-minor-speakers`、`diarization_threshold=None`（按语言默认）、`--adaptive-rate`、`tempo_limit=1.4`、translate/dub 缓存判据 |
-| `submatrix/cli.py` | 上述开关与帮助文案（`diarize` / `pipeline` / `dub`） |
+| `cuesmith/diarize.py` | `DEFAULT_THRESHOLDS`、`default_threshold()`、`ClusterMerge`、`merge_minor_speakers()`；`DiarizeOptions.threshold=None` + `resolved_threshold` + `min_speaker_speech_s` / `min_speaker_share`；报告与告警 |
+| `cuesmith/tts.py` | `BASE_SPEECH_CPS`、`parse_rate` / `format_rate` / `speech_cps` / `speech_capacity_cps` |
+| `cuesmith/dub.py` | 两轮合成（首轮 + 提语速）、`rate_ladder` / `_choose_escalated_rate`、语速进缓存键/引擎键、`tempo_limit=1.4`、`played_ms` / `played_overflow_pct` / `fits_room` / `rate_escalated` |
+| `cuesmith/translate.py` | `dub_cps_budget`、`_slot_budgets`（借用句间空隙）、精简预算取 `min`、`summary.dub_budget` |
+| `cuesmith/pipeline.py` | `--keep-minor-speakers`、`diarization_threshold=None`（按语言默认）、`--adaptive-rate`、`tempo_limit=1.4`、translate/dub 缓存判据 |
+| `cuesmith/cli.py` | 上述开关与帮助文案（`diarize` / `pipeline` / `dub`） |
 | `tests/*` | +27 条单测（`test_diarize` +10、`test_pipeline` +1、`test_dub` +7、`test_translate` +5、`test_tts` +4） |
 
 GUI 不需要改：`--diarization-threshold` / `--keep-minor-speakers` / `--adaptive-rate` 走「额外参数」透传，
@@ -196,26 +196,26 @@ GUI 不需要改：`--diarization-threshold` / `--keep-minor-speakers` / `--adap
 
 ```powershell
 # OPT-1：英文自动人数（10min 播客）
-python -m submatrix diarize --src work\real-samples\podcast\en-podcast-10min.mp4 `
+python -m cuesmith diarize --src work\real-samples\podcast\en-podcast-10min.mp4 `
   --out work\real-samples\diarize\opt-en-10min `
   --srt work\real-samples\run-en-10min\asr\source.srt --src-lang en
 # 期望：说话人 4 个 / 90 段（原始 10 簇，并入 6 个短簇）
 
 # OPT-1 回归：中文 4 人样本 / 中文 3 人素材 / 双人 demo2
-python -m submatrix diarize --src spike\diarization\models\0-four-speakers-zh.wav `
+python -m cuesmith diarize --src spike\diarization\models\0-four-speakers-zh.wav `
   --out work\real-samples\diarize\opt-4p-known4 --src-lang zh --speakers 4
-python -m submatrix diarize --src work\real-samples\zh-dialogue-4min.mkv `
+python -m cuesmith diarize --src work\real-samples\zh-dialogue-4min.mkv `
   --out work\real-samples\diarize\opt-zh-3p-known3 `
   --srt work\real-samples\run-zh-3p\asr\source.srt --src-lang zh --speakers 3
 
 # OPT-2：英→中全链路（10min 播客，冷缓存约 10–11min，成本 ¥0）
-python -m submatrix pipeline --src work\real-samples\podcast\en-podcast-10min.mp4 `
+python -m cuesmith pipeline --src work\real-samples\podcast\en-podcast-10min.mp4 `
   --out work\real-samples\opt-en-10min-v2 --src-lang en --tgt-lang zh `
   --diarize --speakers 3
 # 期望：dub 86/86、人工 1、fits_room 85/86、rate_escalated 10
 
 # zh→en 回归（4min 3 人素材）
-python -m submatrix pipeline --src work\real-samples\zh-dialogue-4min.mkv `
+python -m cuesmith pipeline --src work\real-samples\zh-dialogue-4min.mkv `
   --out work\real-samples\opt-zh-3p-v2 --src-lang zh --tgt-lang en `
   --diarize --speakers 3
 ```
@@ -236,7 +236,7 @@ python -m submatrix pipeline --src work\real-samples\zh-dialogue-4min.mkv `
 | 单测 | **661 passed**（OPT-1 +11、OPT-2 +16） |
 | 一键回归 | **27/27，50.7s**（`work/regression/regression.json`） |
 | 真实素材 | 英文 10min 播客 auto 4 人；英→中 dub 86/86 人工 1；中文 3 人 zh→en 与优化前逐项一致 |
-| GUI | 未改 GUI 代码；`submatrix.gui` 冒烟测试仍随单测通过 |
+| GUI | 未改 GUI 代码；`cuesmith.gui` 冒烟测试仍随单测通过 |
 
 ---
 

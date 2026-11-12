@@ -1,4 +1,4 @@
-"""``python -m submatrix`` 入口。"""
+"""``python -m cuesmith`` 入口。"""
 
 from __future__ import annotations
 

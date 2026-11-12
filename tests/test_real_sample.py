@@ -9,15 +9,15 @@
 三条用例按成本分档，互不依赖：
 
     # 便宜档（约 2 秒）：真视频探一次 + 二次命中缓存
-    $env:SUBMATRIX_REAL_VIDEO = "D:\\软件\\下载\\央视科普-1.mp4"
+    $env:CUESMITH_REAL_VIDEO = "D:\\软件\\下载\\央视科普-1.mp4"
     python -m pytest tests/test_real_sample.py -q
 
     # 现有产物树的结构契约（约 1 秒，不重跑任何阶段）
-    $env:SUBMATRIX_REAL_OUT  = "work/cctv-demo"
+    $env:CUESMITH_REAL_OUT  = "work/cctv-demo"
     python -m pytest tests/test_real_sample.py -q
 
     # 重档（约 5 分钟，真 ASR；翻译走 echo、TTS 走 ffmpeg 正弦，全程离线）
-    $env:SUBMATRIX_REAL_E2E = "1"
+    $env:CUESMITH_REAL_E2E = "1"
     python -m pytest tests/test_real_sample.py -q -m slow
 """
 
@@ -31,22 +31,22 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.pipeline import PipelineOptions, run_pipeline
-from submatrix.report import file_digest
+from cuesmith.pipeline import PipelineOptions, run_pipeline
+from cuesmith.report import file_digest
 
-VIDEO = os.environ.get("SUBMATRIX_REAL_VIDEO", "")
-OUT = os.environ.get("SUBMATRIX_REAL_OUT", "")
+VIDEO = os.environ.get("CUESMITH_REAL_VIDEO", "")
+OUT = os.environ.get("CUESMITH_REAL_OUT", "")
 
 FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
 
 needs_video = pytest.mark.skipif(
     not (VIDEO and Path(VIDEO).is_file()),
-    reason="设置 SUBMATRIX_REAL_VIDEO=<真实视频路径> 才跑（默认跳过）",
+    reason="设置 CUESMITH_REAL_VIDEO=<真实视频路径> 才跑（默认跳过）",
 )
 needs_tree = pytest.mark.skipif(
     not (OUT and (Path(OUT) / "pipeline.json").is_file()),
-    reason="设置 SUBMATRIX_REAL_OUT=<已有的产物树> 才跑（默认跳过）",
+    reason="设置 CUESMITH_REAL_OUT=<已有的产物树> 才跑（默认跳过）",
 )
 needs_tools = pytest.mark.skipif(
     FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
@@ -142,15 +142,15 @@ def test_existing_sample_contract() -> None:
 @needs_video
 @needs_tools
 @pytest.mark.skipif(
-    os.environ.get("SUBMATRIX_REAL_E2E") != "1",
-    reason="设置 SUBMATRIX_REAL_E2E=1 才跑全链路（约 5 分钟，含真 ASR）",
+    os.environ.get("CUESMITH_REAL_E2E") != "1",
+    reason="设置 CUESMITH_REAL_E2E=1 才跑全链路（约 5 分钟，含真 ASR）",
 )
 def test_real_video_full_pipeline_and_rerun_is_cached(tmp_path) -> None:
     """真视频全链路跑一遍（真 ASR / 真排版 / 真烧录 / 真标识），再跑一遍必须全缓存。
 
     翻译走 ``echo``、TTS 走 ffmpeg 正弦，所以这条**不需要网络**：
     它验的是编排、缓存、ffmpeg 各阶段与报告契约，不是翻译/合成质量。
-    ASR 用自动探测的解释器；本机装了好几套 venv 时可以用 ``SUBMATRIX_ASR_PYTHON``
+    ASR 用自动探测的解释器；本机装了好几套 venv 时可以用 ``CUESMITH_ASR_PYTHON``
     钉死一个（实测 154s 素材约 4–5 分钟）。
     """
 
@@ -164,7 +164,7 @@ def test_real_video_full_pipeline_and_rerun_is_cached(tmp_path) -> None:
         tts_command=offline_tts_command(),
         keep_bgm=False,  # 不跑 demucs：模型不在时别白等两分钟
         burn_position="top",
-        asr_python=os.environ.get("SUBMATRIX_ASR_PYTHON") or None,
+        asr_python=os.environ.get("CUESMITH_ASR_PYTHON") or None,
     )
 
     first = run_pipeline(options)

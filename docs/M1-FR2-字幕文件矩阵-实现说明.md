@@ -5,7 +5,7 @@
 | 日期 | 2026-10-20 |
 | 状态 | ✅ 完成（M1 交付：5 格式导出 + 校验报告） |
 | 对应需求 | `视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md` §3 FR-2、AC-4 / AC-5 / AC-6 |
-| 代码 | `submatrix/`（915 行，纯标准库） |
+| 代码 | `cuesmith/`（915 行，纯标准库） |
 | 测试 | `tests/`（878 行，**112 passed**，含 9 个 ffmpeg 集成用例） |
 | 实测产物 | `work/m1-demo/app/`（真实应用产物 7 条）、`work/m1-demo/proto/`（原型产物 6 条） |
 
@@ -17,7 +17,7 @@
 
 ```powershell
 # 在仓库根目录（= 本项目自建层根目录）执行
-python -m submatrix build `
+python -m cuesmith build `
   --src spike\pvt-out-vtv\zh-cn.srt `
   --tgt spike\pvt-out-vtv\en.srt `
   --out work\m1-demo\app
@@ -41,7 +41,7 @@ python -m submatrix build `
 阈值可配（默认值即 PRD 数值）：
 
 ```powershell
-python -m submatrix build --src a.srt --tgt b.srt --out out `
+python -m cuesmith build --src a.srt --tgt b.srt --out out `
   --cps-src 9 --cps-tgt 20 --width-src 16 --width-tgt 42 --max-lines 2
 ```
 
@@ -192,6 +192,6 @@ python -m pytest
 
 ## 7. 下一步
 
-**M2 = FR-1 探测与内封字幕直出**（`ffprobe` + `ffmpeg -map 0:s:N` → SRT + `manifest.json` 路由结论），1–2 天。FR-2 已把下游接口准备好：只要 FR-1 产出 `source.srt`，`submatrix build` 直接可跑。
+**M2 = FR-1 探测与内封字幕直出**（`ffprobe` + `ffmpeg -map 0:s:N` → SRT + `manifest.json` 路由结论），1–2 天。FR-2 已把下游接口准备好：只要 FR-1 产出 `source.srt`，`cuesmith build` 直接可跑。
 
 依赖关系：M1 的 `report.json` 的 `notes`/`findings` 结构沿用到 FR-1/FR-3/FR-4，不另建一套报告格式。

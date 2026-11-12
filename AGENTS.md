@@ -1,6 +1,6 @@
 # AGENTS.md · 给 AI 协作者的入口
 
-本仓库是 Python 项目：视频字幕提取 / 翻译 / 配音 / 成片（`submatrix/` 是主包）。
+本仓库是 Python 项目：视频字幕提取 / 翻译 / 配音 / 成片（`cuesmith/` 是主包）。
 用户文档见 `README.md`，其余文档都在 `docs/`。
 
 **写或改任何代码前，先读 [`docs/代码规范.md`](docs/代码规范.md)。** 冲突时以它为准；
@@ -8,11 +8,11 @@
 
 ## 十条硬规则（违反即返工）
 
-1. **主包零第三方依赖**：`submatrix/` 只用标准库 + 外部 `ffmpeg`/`ffprobe`；
+1. **主包零第三方依赖**：`cuesmith/` 只用标准库 + 外部 `ffmpeg`/`ffprobe`；
    重依赖（numpy / torch / faster_whisper / sherpa_onnx / gradio…）只能在 `*_worker.py`
    里 import，且只能跑在子进程。
-2. **三个接缝只走一个入口**：跑 ffmpeg/ffprobe → `submatrix/media.py`；找解释器 →
-   `submatrix/interpreters.py`；起常驻 worker → `submatrix/worker_protocol.py`。
+2. **三个接缝只走一个入口**：跑 ffmpeg/ffprobe → `cuesmith/media.py`；找解释器 →
+   `cuesmith/interpreters.py`；起常驻 worker → `cuesmith/worker_protocol.py`。
    别处不许 `shutil.which`、不许手拼 ffmpeg 命令。
 3. **依赖单向**（分层表见规范 §1.1），不许有环；新增一条跨层依赖要同时改规范和
    `tests/test_structure.py`，让它出现在 diff 里。
@@ -35,13 +35,13 @@
 
 ```powershell
 python -m pytest -q                     # 全量；含 tests/test_structure.py 的结构检查
-python -m ruff check submatrix tests    # 必须 0（E4/E7/E9/F/I/UP；F 即原 pyflakes）
+python -m ruff check cuesmith tests    # 必须 0（E4/E7/E9/F/I/UP；F 即原 pyflakes）
 ```
 
 改了较大一块逻辑时再加一条覆盖率（门槛 80%，当前 83%）：
 
 ```powershell
-python -m pytest -q --cov=submatrix --cov-fail-under=80
+python -m pytest -q --cov=cuesmith --cov-fail-under=80
 ```
 
 ## 提交信息

@@ -15,18 +15,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from submatrix import cli as cli_module
-from submatrix import media as media_module
-from submatrix import pipeline as pipeline_module
-from submatrix.asr import model_variant, preferred_model
-from submatrix.cli import build_parser
-from submatrix.diarize import SpeakerTurn, write_segments
-from submatrix.glossary import Glossary, Term, glossary_fingerprint
-from submatrix.pipeline import STAGES, PipelineError, PipelineOptions, run_pipeline
-from submatrix.srt import load_srt
-from submatrix.translate import LlmConfig
-from submatrix.tts import speech_capacity_cps
-from submatrix.validate import Limits
+from cuesmith import cli as cli_module
+from cuesmith import media as media_module
+from cuesmith import pipeline as pipeline_module
+from cuesmith.asr import model_variant, preferred_model
+from cuesmith.cli import build_parser
+from cuesmith.diarize import SpeakerTurn, write_segments
+from cuesmith.glossary import Glossary, Term, glossary_fingerprint
+from cuesmith.pipeline import STAGES, PipelineError, PipelineOptions, run_pipeline
+from cuesmith.srt import load_srt
+from cuesmith.translate import LlmConfig
+from cuesmith.tts import speech_capacity_cps
+from cuesmith.validate import Limits
 
 SAMPLE_RATE = 24000
 
@@ -75,7 +75,7 @@ def install_fakes(
         # 按真 manifest 的契约落盘：输入身份（sha256）+ 源语言。
         # 假报告如果只有 {"status": ...}，就测不出"换了视频却复用旧产物"这类缓存 bug。
         manifest_payload = {
-            "tool": "submatrix",
+            "tool": "cuesmith",
             "status": route,
             "input": {
                 "path": str(src_path),
@@ -230,7 +230,7 @@ def install_fakes(
             json.dumps(
                 {
                     "schema_version": 1,
-                    "tool": "submatrix",
+                    "tool": "cuesmith",
                     "version": "test",
                     "srt": str(srt) if srt else None,
                     "speakers": speakers,
@@ -664,7 +664,7 @@ def test_zh_target_defaults_voice_and_rate(tmp_path, monkeypatch) -> None:
 
 
 def test_glossary_hotwords_are_passed_to_asr(tmp_path, monkeypatch) -> None:
-    from submatrix.glossary import Glossary, Term
+    from cuesmith.glossary import Glossary, Term
 
     calls = Calls()
     install_fakes(monkeypatch, calls, route="route_to_asr")
@@ -1319,7 +1319,7 @@ def test_diarize_single_speaker_falls_back_to_single_voice(tmp_path, monkeypatch
 
 
 def test_diarize_failure_falls_back_to_single_voice(tmp_path, monkeypatch) -> None:
-    from submatrix.diarize import DiarizeError
+    from cuesmith.diarize import DiarizeError
 
     calls = Calls()
     install_fakes(monkeypatch, calls, route="route_to_asr")
@@ -1633,7 +1633,7 @@ def test_preferred_model_returns_medium_for_chinese(monkeypatch, tmp_path) -> No
     medium.mkdir()
     (medium / "model.bin").write_bytes(b"weights")
     monkeypatch.setattr(
-        "submatrix.asr.local_models",
+        "cuesmith.asr.local_models",
         lambda: {"small": tmp_path / "faster-whisper-small", "medium": medium},
     )
 
@@ -1643,7 +1643,7 @@ def test_preferred_model_returns_medium_for_chinese(monkeypatch, tmp_path) -> No
 
 def test_preferred_model_falls_back_when_medium_missing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        "submatrix.asr.local_models",
+        "cuesmith.asr.local_models",
         lambda: {"small": tmp_path / "faster-whisper-small", "medium": tmp_path / "nope"},
     )
 
@@ -1653,7 +1653,7 @@ def test_preferred_model_falls_back_when_medium_missing(monkeypatch, tmp_path) -
 def test_asr_uses_medium_for_chinese_by_default(tmp_path, monkeypatch) -> None:
     """中文源语默认 medium：small 会把「刘翔」识别成「流向」（M7 实测）。"""
 
-    from submatrix import asr as asr_module
+    from cuesmith import asr as asr_module
 
     monkeypatch.setattr(asr_module, "preferred_model", lambda language: "medium")
     captured: dict[str, object] = {}
@@ -1747,7 +1747,7 @@ def test_music_noise_cue_filtered_before_translate(tmp_path, monkeypatch) -> Non
 def test_default_speaker_voices_are_live_and_distinct() -> None:
     """回归：默认音色池不能含已下线的 voice（M16 真实测试：Davis 已 NoAudioReceived）。"""
 
-    from submatrix.pipeline import DEFAULT_SPEAKER_VOICES
+    from cuesmith.pipeline import DEFAULT_SPEAKER_VOICES
 
     for language, pool in DEFAULT_SPEAKER_VOICES.items():
         assert len(pool) >= 4, language
@@ -1805,7 +1805,7 @@ def test_diarize_cache_invalidates_count_threshold_and_language(tmp_path: Path) 
 def test_language_default_cluster_threshold(tmp_path: Path) -> None:
     """OPT-1：英文默认阈值 0.95（0.8 会把播客笑声/广告拆成 15 个簇），中文保持 0.8。"""
 
-    from submatrix.diarize import default_threshold
+    from cuesmith.diarize import default_threshold
 
     assert default_threshold("en") == pytest.approx(0.95)
     assert default_threshold("EN") == pytest.approx(0.95)

@@ -6,7 +6,7 @@
 - 每个处理单元（批量里的一条视频）一行：源文件、输出目录、GUI 表单参数、实际 argv、
   状态/退出码、成本块、逐阶段状态、说话人数、墙钟、错误摘要；
 - **不存 API Key**（历史只记参数，重跑 LLM 任务时由用户重新填写/走环境变量）；
-- 默认库文件 ``work/history.db``，可用 ``--db`` 或环境变量 ``SUBMATRIX_HISTORY_DB`` 覆盖。
+- 默认库文件 ``work/history.db``，可用 ``--db`` 或环境变量 ``CUESMITH_HISTORY_DB`` 覆盖。
 
 表结构（``tasks``）：id / created_at / updated_at / source / out_dir / status /
 exit_code / settings(JSON) / argv(JSON) / cost(JSON) / stages(JSON) / speakers /
@@ -80,11 +80,11 @@ class HistoryError(RuntimeError):
 
 
 def history_db_path(explicit: str | Path | None = None) -> Path:
-    """历史库路径：显式参数 > ``SUBMATRIX_HISTORY_DB`` > 项目内 ``work/history.db``。"""
+    """历史库路径：显式参数 > ``CUESMITH_HISTORY_DB`` > 项目内 ``work/history.db``。"""
 
     if explicit:
         return Path(explicit).expanduser()
-    env = os.environ.get("SUBMATRIX_HISTORY_DB")
+    env = os.environ.get("CUESMITH_HISTORY_DB")
     if env:
         return Path(env).expanduser()
     return REPO_ROOT / "work" / DEFAULT_DB_NAME

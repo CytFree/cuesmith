@@ -1,4 +1,7 @@
-# submatrix · 视频字幕提取 / 翻译 / 配音 / 成片
+# cuesmith · 字幕工坊
+
+**一条命令把视频变成「发布字幕 + 双语字幕 + 配音成片 + 硬字幕成片 + AIGC 标识」。**
+（原名 submatrix，公开发布前改名；见 [CHANGELOG](CHANGELOG.md)。）
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
@@ -33,13 +36,13 @@
 
 ```powershell
 # 一条命令：中文视频 → 英文字幕 + 英文配音 + 硬字幕成片 + AIGC 标识
-python -m submatrix pipeline --src D:\videos\a.mp4 --out work\run1 --src-lang zh --tgt-lang en
+python -m cuesmith pipeline --src D:\videos\a.mp4 --out work\run1 --src-lang zh --tgt-lang en
 
 # 反向：英文视频 → 中文成片
-python -m submatrix pipeline --src D:\videos\b.mp4 --out work\run2 --src-lang en --tgt-lang zh
+python -m cuesmith pipeline --src D:\videos\b.mp4 --out work\run2 --src-lang en --tgt-lang zh
 
 # GUI
-python -m submatrix gui
+python -m cuesmith gui
 ```
 
 > `pipeline` 要求**源语言 ≠ 目标语言**（同语言没有翻译必要，会直接报错）。
@@ -86,8 +89,8 @@ work/run1/
 
 ```powershell
 git clone <repo> ; cd <repo>
-python -m submatrix --help          # 直接可用：主包只用标准库 + ffmpeg
-# 可选：安装成包（装完多一个 `submatrix` 命令，等价于 python -m submatrix）
+python -m cuesmith --help          # 直接可用：主包只用标准库 + ffmpeg
+# 可选：安装成包（装完多一个 `cuesmith` 命令，等价于 python -m cuesmith）
 python -m pip install -e .
 python -m pip install -e ".[gui]"    # 带本地 Web GUI
 python -m pip install -e ".[dev]"    # 开发：pytest / pytest-cov / ruff
@@ -96,7 +99,7 @@ python -m pip install -e ".[dev]"    # 开发：pytest / pytest-cov / ruff
 > 主包不 import 任何模型库；ASR / TTS / 分离 / BGM / GUI 都在各自的 venv 里，
 > 通过**子进程**调用（这也是 GPL/LGPL 组件与主包隔离的方式）。
 >
-> 也可以直接装打好的 wheel：`python -m pip install submatrix-0.1.0-py3-none-any.whl`
+> 也可以直接装打好的 wheel：`python -m pip install cuesmith-0.1.0-py3-none-any.whl`
 > （wheel 里含全部 37 个模块与三个 worker 脚本，但**不含** `spike/` 下的模型与 venv）。
 
 ### 3.3 Worker 环境（按需装）
@@ -129,7 +132,7 @@ spike/gui/.venv/Scripts/python.exe -m pip install "gradio==6.30.0" -i https://py
 python -m venv spike/asr/.venv
 spike/asr/.venv/Scripts/python.exe -m pip install "faster-whisper==1.2.1" "ctranslate2==4.5.0" "onnxruntime==1.20.1" `
     -i https://pypi.tuna.tsinghua.edu.cn/simple
-# 之后用 --asr-python spike/asr/.venv/Scripts/python.exe（或设 SUBMATRIX_ASR_PYTHON）
+# 之后用 --asr-python spike/asr/.venv/Scripts/python.exe（或设 CUESMITH_ASR_PYTHON）
 ```
 
 BGM 保留（demucs + torch CPU）的安装命令见
@@ -149,8 +152,8 @@ BGM 保留（demucs + torch CPU）的安装命令见
 
 ```powershell
 python -m pytest -q                          # 854 passed, 4 skipped
-python -m pytest -q --cov=submatrix --cov-fail-under=80   # 覆盖率基线 83%（需 pytest-cov）
-python -m ruff check submatrix tests                       # 0 告警（需 ruff）
+python -m pytest -q --cov=cuesmith --cov-fail-under=80   # 覆盖率基线 83%（需 pytest-cov）
+python -m ruff check cuesmith tests                       # 0 告警（需 ruff）
 python tools\run_samples.py --out work\regression   # 27/27
 spike\gui\.venv\Scripts\python.exe tools\gui_smoke.py   # GUI HTTP 200
 ```
@@ -159,9 +162,9 @@ spike\gui\.venv\Scripts\python.exe tools\gui_smoke.py   # GUI HTTP 200
 按需开启，见 `tests/test_real_sample.py`：
 
 ```powershell
-$env:SUBMATRIX_REAL_VIDEO = "D:\...\你的视频.mp4"     # 真视频探一次 + 二次命中缓存（约 2 秒）
-$env:SUBMATRIX_REAL_OUT   = "work/cctv-demo"          # 已有产物树：报告数字 vs 盘上文件（约 1 秒）
-$env:SUBMATRIX_REAL_E2E   = "1"                        # 全链路真跑（约 5 分钟，含真 ASR，离线）
+$env:CUESMITH_REAL_VIDEO = "D:\...\你的视频.mp4"     # 真视频探一次 + 二次命中缓存（约 2 秒）
+$env:CUESMITH_REAL_OUT   = "work/cctv-demo"          # 已有产物树：报告数字 vs 盘上文件（约 1 秒）
+$env:CUESMITH_REAL_E2E   = "1"                        # 全链路真跑（约 5 分钟，含真 ASR，离线）
 python -m pytest tests/test_real_sample.py -q -m slow
 ```
 
@@ -170,58 +173,58 @@ python -m pytest tests/test_real_sample.py -q -m slow
 ## 4. 常用命令
 
 ```powershell
-python -m submatrix --help                    # 子命令总览
+python -m cuesmith --help                    # 子命令总览
 
 # 分阶段（调试/局部重跑）
-python -m submatrix probe     --src a.mp4 --out work\p --src-lang zh
-python -m submatrix asr       --src a.mp4 --out work\p --language zh
-python -m submatrix merge     --src work\p\asr\source.srt --out work\p
-python -m submatrix translate --src work\p\merge\merged.srt --out work\p --src-lang zh --tgt-lang en
-python -m submatrix build     --src work\p\merge\merged.srt --tgt work\p\translate\en.srt --out work\p
-python -m submatrix dub       --video a.mp4 --srt work\p\translate\en.srt --out work\p
-python -m submatrix burn      --video a.mp4 --subtitle work\p\matrix\en.srt --out work\p
-python -m submatrix mark      --src work\p\burn\burned.mp4 --out work\p
+python -m cuesmith probe     --src a.mp4 --out work\p --src-lang zh
+python -m cuesmith asr       --src a.mp4 --out work\p --language zh
+python -m cuesmith merge     --src work\p\asr\source.srt --out work\p
+python -m cuesmith translate --src work\p\merge\merged.srt --out work\p --src-lang zh --tgt-lang en
+python -m cuesmith build     --src work\p\merge\merged.srt --tgt work\p\translate\en.srt --out work\p
+python -m cuesmith dub       --video a.mp4 --srt work\p\translate\en.srt --out work\p
+python -m cuesmith burn      --video a.mp4 --subtitle work\p\matrix\en.srt --out work\p
+python -m cuesmith mark      --src work\p\burn\burned.mp4 --out work\p
 
 # 多人声（自动判人数：VAD 预过滤 + 声纹二次聚类，默认开）
-python -m submatrix diarize   --src a.mp4 --out work\p --srt work\p\merge\merged.srt `
+python -m cuesmith diarize   --src a.mp4 --out work\p --srt work\p\merge\merged.srt `
     --python spike\diarization\.venv\Scripts\python.exe
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\p --speakers-json work\p\diarize\speakers.json `
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\p --speakers-json work\p\diarize\speakers.json `
     --speaker-voices "SPEAKER_00=en-US-GuyNeural,SPEAKER_01=en-US-AriaNeural"
 
 # 已知人数最稳（显式 --speakers 时二次聚类自动让位）；
 # 音色/音乐干扰大或想对比基线：--no-vad / --clustering sherpa / --merge-alpha 0.5
-python -m submatrix diarize --src a.mp4 --out work\p --speakers 4
-python -m submatrix diarize --src a.mp4 --out work\p --src-lang zh --no-vad
+python -m cuesmith diarize --src a.mp4 --out work\p --speakers 4
+python -m cuesmith diarize --src a.mp4 --out work\p --src-lang zh --no-vad
 
 # 配音：默认 Edge-TTS（在线）；联网失败自动用本地 TTS 兜底（需本地模型）
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\p
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\p
 # 完全离线：本地 Kokoro（默认音色按目标语言：zh→47 / en→3）
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\p --tts-provider local
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\p --tts-provider local
 # 指定本地模型/音色（多人声：SPEAKER_00=本地音色 spec）
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\p --tts-provider local `
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\p --tts-provider local `
     --local-tts-model spike\local-tts\vits-melo-tts-zh_en --speaker-voices "SPEAKER_00=0"
 # 只关掉兜底（行为回到旧版）
-python -m submatrix dub --video a.mp4 --srt en.srt --out work\p --tts-fallback off
+python -m cuesmith dub --video a.mp4 --srt en.srt --out work\p --tts-fallback off
 
 # 全链路
-python -m submatrix pipeline --src a.mp4 --out work\run --src-lang zh --tgt-lang en `
+python -m cuesmith pipeline --src a.mp4 --out work\run --src-lang zh --tgt-lang en `
     [--llm] [--keep-bgm] [--diarize] [--speakers 4] [--speaker-voices ...] [--no-vad] `
     [--clustering auto|sherpa|embedding] [--merge-alpha 0.55] `
     [--tts-provider edge|local] [--tts-fallback local|off] [--local-tts-voice 47] `
     [--force] [--regenerate-tts] [--glossary terms.json] [--no-burn-subtitles] [--no-mark]
 
 # 成本
-python -m submatrix cost --work work\run             # 已有产物估算
-python -m submatrix cost --work work\run --json
-python -m submatrix cost --work work\run --pricing 我的价表.json
+python -m cuesmith cost --work work\run             # 已有产物估算
+python -m cuesmith cost --work work\run --json
+python -m cuesmith cost --work work\run --pricing 我的价表.json
 
 # GUI
-python -m submatrix gui [--port 7860] [--no-browser] [--allowed-path D:\out]
+python -m cuesmith gui [--port 7860] [--no-browser] [--allowed-path D:\out]
 
 # 任务历史（GUI 跑过的记录都在 sqlite；可不开页面查/删）
-python -m submatrix history --limit 20
-python -m submatrix history --json
-python -m submatrix history --delete 7
+python -m cuesmith history --limit 20
+python -m cuesmith history --json
+python -m cuesmith history --delete 7
 ```
 
 关键默认值：
@@ -240,7 +243,7 @@ python -m submatrix history --delete 7
 ## 5. GUI 使用
 
 ```powershell
-python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://127.0.0.1:7860/
+python -m cuesmith gui        # 自动重入 spike/gui/.venv，打开 http://127.0.0.1:7860/
 ```
 
 - **视频路径**：一行一个（批量）；或用「上传视频」多选；
@@ -265,7 +268,7 @@ python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://12
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `找不到装有 edge-tts 的 Python` | 用 `--tts-python spike\.venv311\Scripts\python.exe`，或设 `SUBMATRIX_TTS_PYTHON` |
+| `找不到装有 edge-tts 的 Python` | 用 `--tts-python spike\.venv311\Scripts\python.exe`，或设 `CUESMITH_TTS_PYTHON` |
 | `找不到装有 faster-whisper 的 Python` | `--asr-python` 指向装了 faster-whisper 的解释器 |
 | `没找到说话人分割模型` | 按 [M11 §3](docs/M11-多人声-说话人分离与多音色配音-实现说明.md) 下载到 `spike/diarization/models` |
 | `找不到可用的中文字体` | `mark` 默认只找 Windows 字体（雅黑/黑体/宋体）与 Linux 的 Noto CJK；macOS 或自定义字体请用 `--font-file` 指向一个 `.ttf/.ttc` |
@@ -275,7 +278,7 @@ python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://12
 | 配音 `0/15` 或部分失败 | 看 `dub/dub_report.json` 的失败条目；多半是 TTS 解释器/音色名不对 |
 | Edge-TTS 不可用（断网/端点抖动） | 默认会自动用本地 TTS 兜底（`--tts-fallback local`，告警里写明；需 `spike/local-tts/` 模型）；想彻底离线用 `--tts-provider local`；关掉兜底 `--tts-fallback off` |
 | 改了参数但结果没变 | 阶段缓存生效；确认对应阶段是否 `cached`，或加 `--force` |
-| GUI 端口占用 | `python -m submatrix gui --port 7861` |
+| GUI 端口占用 | `python -m cuesmith gui --port 7861` |
 | 长视频很慢 | ASR/BGM 是 CPU 大头；阶段缓存可避免重复跑；先用短素材调参 |
 
 ---
@@ -292,7 +295,7 @@ python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://12
 ## 8. 目录结构
 
 ```
-submatrix/            主包（标准库 + ffmpeg，零运行时依赖）
+cuesmith/            主包（标准库 + ffmpeg，零运行时依赖）
   cli.py pipeline.py asr.py translate.py dub.py burn.py mark.py ...
   gui.py voices.py cost.py clean.py history.py localtts.py tts_worker.py
 spike/                worker 环境与模型（不进仓库分发）

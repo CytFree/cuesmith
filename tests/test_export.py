@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from submatrix.export import dump_ass, dump_bilingual_srt, dump_txt, dump_vtt
-from submatrix.srt import Cue, Subtitle, Timing, parse_srt
+from cuesmith.export import dump_ass, dump_bilingual_srt, dump_txt, dump_vtt
+from cuesmith.srt import Cue, Subtitle, Timing, parse_srt
 
 
 def sub(*pairs: tuple[int, int, str]) -> Subtitle:

@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-CLI = [sys.executable, "-m", "submatrix"]
+CLI = [sys.executable, "-m", "cuesmith"]
 MODEL_DIR = ROOT / "spike" / "diarization" / "models"
 AUDIO = MODEL_DIR / "0-four-speakers-zh.wav"
 OUT = ROOT / "work" / "multi-speaker" / "validation"

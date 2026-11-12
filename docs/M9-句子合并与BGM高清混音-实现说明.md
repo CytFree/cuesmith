@@ -48,7 +48,7 @@ a battle for salt. How did …    ← 下一条才接上，英文读不通
 
 ### 2.1 新增可复用的 `run_merge`
 
-`submatrix/merge.py` 原来只有纯函数 `merge_cues`，CLI 自己在 `_run_merge` 里拼落盘与
+`cuesmith/merge.py` 原来只有纯函数 `merge_cues`，CLI 自己在 `_run_merge` 里拼落盘与
 报告。现在抽出 `run_merge(src, out, options)` → `MergeResult`，CLI 与 pipeline 共用：
 
 - 读 SRT → `merge_cues` → 写 `merged.srt` + `merge.json`；
@@ -88,7 +88,7 @@ probe → asr → merge → translate → build → dub → mark
 
 ## 3. B 项实现：混音总线 44.1kHz 立体声
 
-`submatrix/bgm.py`：
+`cuesmith/bgm.py`：
 
 - `BgmOptions.sample_rate` → **`mix_sample_rate=44100` + `mix_channels=2`**（仍可显式降级，
   测试覆盖 24k 单声道路径）；
@@ -109,7 +109,7 @@ probe → asr → merge → translate → build → dub → mark
 ```powershell
 $env:DEEPSEEK_API_KEY = "sk-..."   # 只在当前 shell
 
-python -m submatrix pipeline `
+python -m cuesmith pipeline `
   --src "D:\软件\下载\央视科普-1.mp4" --out work/cctv-demo `
   --src-lang zh --tgt-lang en --llm `
   --asr-python "spike/pyvideotrans/.venv/Scripts/python.exe" `
@@ -195,10 +195,10 @@ python -m submatrix pipeline `
 
 | 文件 | 变更 |
 |---|---|
-| `submatrix/merge.py` | `MergeError` / `MergeResult` / `run_merge`（报告 + input sha256） |
-| `submatrix/pipeline.py` | `merge` 阶段；`merge/--no-merge`、`--merge-max-duration/gap`；缓存 sha256 校验（merge/translate/build/dub）；asr cached cue 数以文件为准 |
-| `submatrix/cli.py` | pipeline 新参数与打印；`merge` 子命令改用 `run_merge`；dub 打印混音格式 |
-| `submatrix/bgm.py` | `mix_sample_rate/mix_channels`、`_mix_bus_format()`、44.1k 立体声输出；`BgmResult` 带格式 |
-| `submatrix/dub.py` | 混音格式透传与报告 |
+| `cuesmith/merge.py` | `MergeError` / `MergeResult` / `run_merge`（报告 + input sha256） |
+| `cuesmith/pipeline.py` | `merge` 阶段；`merge/--no-merge`、`--merge-max-duration/gap`；缓存 sha256 校验（merge/translate/build/dub）；asr cached cue 数以文件为准 |
+| `cuesmith/cli.py` | pipeline 新参数与打印；`merge` 子命令改用 `run_merge`；dub 打印混音格式 |
+| `cuesmith/bgm.py` | `mix_sample_rate/mix_channels`、`_mix_bus_format()`、44.1k 立体声输出；`BgmResult` 带格式 |
+| `cuesmith/dub.py` | 混音格式透传与报告 |
 | `tests/` | 见 §5 |
 | `work/cctv-demo/` | M9 复跑产物 + `before-m9/`（M8 对照） |

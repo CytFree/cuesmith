@@ -12,9 +12,9 @@ from __future__ import annotations
 
 import pytest
 
-from submatrix.langs import LANG_PROFILES, SUPPORTED_LANGS, profile
-from submatrix.layout import LayoutOptions
-from submatrix.validate import Limits
+from cuesmith.langs import LANG_PROFILES, SUPPORTED_LANGS, profile
+from cuesmith.layout import LayoutOptions
+from cuesmith.validate import Limits
 
 
 def test_profile_lookup_returns_the_table_entry() -> None:

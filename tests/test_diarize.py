@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.diarize import (
+from cuesmith.diarize import (
     DiarizeError,
     DiarizeOptions,
     SpeakerTurn,
@@ -153,7 +153,7 @@ def test_voice_map_falls_back_to_default() -> None:
 
 
 def test_find_models_prefers_segmentation_and_requested_embedding(tmp_path, monkeypatch) -> None:
-    import submatrix.diarize as module
+    import cuesmith.diarize as module
 
     models = tmp_path / "models"
     seg = models / "sherpa-onnx-pyannote-segmentation-3-0"
@@ -162,8 +162,8 @@ def test_find_models_prefers_segmentation_and_requested_embedding(tmp_path, monk
     (models / "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx").write_bytes(b"y")
     (models / "nemo_en_titanet_small.onnx").write_bytes(b"z")
     monkeypatch.setattr(module, "_models_dir", lambda: models)
-    monkeypatch.delenv("SUBMATRIX_DIARIZATION_SEGMENTATION", raising=False)
-    monkeypatch.delenv("SUBMATRIX_DIARIZATION_EMBEDDING", raising=False)
+    monkeypatch.delenv("CUESMITH_DIARIZATION_SEGMENTATION", raising=False)
+    monkeypatch.delenv("CUESMITH_DIARIZATION_EMBEDDING", raising=False)
 
     segmentation, embedding = find_models(language="zh")
 
@@ -174,12 +174,12 @@ def test_find_models_prefers_segmentation_and_requested_embedding(tmp_path, monk
 
 
 def test_find_models_missing_hint(tmp_path, monkeypatch) -> None:
-    import submatrix.diarize as module
+    import cuesmith.diarize as module
 
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr(module, "_models_dir", lambda: empty)
-    monkeypatch.delenv("SUBMATRIX_DIARIZATION_SEGMENTATION", raising=False)
+    monkeypatch.delenv("CUESMITH_DIARIZATION_SEGMENTATION", raising=False)
 
     with pytest.raises(DiarizeError, match="分割模型"):
         find_models()
@@ -188,7 +188,7 @@ def test_find_models_missing_hint(tmp_path, monkeypatch) -> None:
 def test_find_models_ignores_vad_model(tmp_path, monkeypatch) -> None:
     """VAD 模型不是声纹模型：只剩 segmentation + vad 时不能把它当 embedding。"""
 
-    import submatrix.diarize as module
+    import cuesmith.diarize as module
 
     models = tmp_path / "models"
     seg = models / "sherpa-onnx-pyannote-segmentation-3-0"
@@ -198,8 +198,8 @@ def test_find_models_ignores_vad_model(tmp_path, monkeypatch) -> None:
     vad.mkdir()
     (vad / "silero_vad.onnx").write_bytes(b"v")
     monkeypatch.setattr(module, "_models_dir", lambda: models)
-    monkeypatch.delenv("SUBMATRIX_DIARIZATION_SEGMENTATION", raising=False)
-    monkeypatch.delenv("SUBMATRIX_DIARIZATION_EMBEDDING", raising=False)
+    monkeypatch.delenv("CUESMITH_DIARIZATION_SEGMENTATION", raising=False)
+    monkeypatch.delenv("CUESMITH_DIARIZATION_EMBEDDING", raising=False)
 
     with pytest.raises(DiarizeError, match="声纹模型"):
         find_models()
@@ -208,11 +208,11 @@ def test_find_models_ignores_vad_model(tmp_path, monkeypatch) -> None:
 def test_find_vad_model_resolution(tmp_path, monkeypatch) -> None:
     """OPT-6：显式 > 环境变量 > 项目默认目录；没装返回 None（不是错误）。"""
 
-    import submatrix.diarize as module
+    import cuesmith.diarize as module
 
     models = tmp_path / "models"
     monkeypatch.setattr(module, "_models_dir", lambda: models)
-    monkeypatch.delenv("SUBMATRIX_DIARIZATION_VAD", raising=False)
+    monkeypatch.delenv("CUESMITH_DIARIZATION_VAD", raising=False)
     assert find_vad_model() is None
 
     default = models / "vad" / "silero_vad.onnx"
@@ -226,7 +226,7 @@ def test_find_vad_model_resolution(tmp_path, monkeypatch) -> None:
 
     other = tmp_path / "other.onnx"
     other.write_bytes(b"o")
-    monkeypatch.setenv("SUBMATRIX_DIARIZATION_VAD", str(other))
+    monkeypatch.setenv("CUESMITH_DIARIZATION_VAD", str(other))
     assert find_vad_model() == other
 
 
@@ -374,7 +374,7 @@ def test_run_diarize_enables_vad_when_model_present(tmp_path) -> None:
 def test_run_diarize_vad_model_missing_is_skipped(tmp_path, monkeypatch) -> None:
     """没装 VAD 模型时安静降级：不传参、报告写 skipped，链路照跑。"""
 
-    import submatrix.diarize as module
+    import cuesmith.diarize as module
 
     monkeypatch.setattr(module, "find_vad_model", lambda explicit=None: None)
     runner = FakeRunner(worker_payload())
@@ -421,7 +421,7 @@ def test_worker_compacts_speech_and_maps_back() -> None:
 
     import numpy as np
 
-    from submatrix import diarize_worker as worker
+    from cuesmith import diarize_worker as worker
 
     sr = 16000
     samples = (np.arange(sr * 3, dtype=np.float32) / sr).astype(np.float32)
@@ -469,7 +469,7 @@ def test_worker_merge_embeddings_merges_similar_clusters() -> None:
 
     import numpy as np
 
-    from submatrix import diarize_worker as worker
+    from cuesmith import diarize_worker as worker
 
     embeddings = np.array(
         [_unit(1, 0, 0), _unit(0.98, 0.1, 0), _unit(0, 1, 0)], dtype=np.float64
@@ -500,7 +500,7 @@ def test_worker_merge_embeddings_single_speaker_collapses_to_one() -> None:
 
     import numpy as np
 
-    from submatrix import diarize_worker as worker
+    from cuesmith import diarize_worker as worker
 
     count = 16
     embeddings = np.array(
@@ -518,7 +518,7 @@ def test_worker_merge_embeddings_single_speaker_collapses_to_one() -> None:
 def test_worker_windows_and_relabel_helpers() -> None:
     import numpy as np
 
-    from submatrix import diarize_worker as worker
+    from cuesmith import diarize_worker as worker
 
     assert worker._windows_in_span(0.0, 0.5) == []  # 短于 min_win 丢弃
     assert worker._windows_in_span(0.0, 0.8) == [(0.0, 0.8)]
@@ -853,7 +853,7 @@ def test_run_diarize_keep_minor_speakers_disables_merge(tmp_path) -> None:
 
 
 def test_write_and_load_segments_round_trip(tmp_path) -> None:
-    from submatrix.diarize import load_segments, write_segments
+    from cuesmith.diarize import load_segments, write_segments
 
     src = tmp_path / "in.mp4"
     src.write_bytes(b"fake")
@@ -876,7 +876,7 @@ def test_write_and_load_segments_round_trip(tmp_path) -> None:
 
 
 def test_attach_speakers_writes_assignments_and_report(tmp_path) -> None:
-    from submatrix.diarize import attach_speakers
+    from cuesmith.diarize import attach_speakers
 
     srt = tmp_path / "src.srt"
     srt.write_text(SRT_TWO, encoding="utf-8", newline="\n")
@@ -901,7 +901,7 @@ def test_attach_speakers_writes_assignments_and_report(tmp_path) -> None:
 
 
 def test_attach_speakers_with_no_turns_is_empty(tmp_path) -> None:
-    from submatrix.diarize import attach_speakers
+    from cuesmith.diarize import attach_speakers
 
     srt = tmp_path / "src.srt"
     srt.write_text(SRT_TWO, encoding="utf-8", newline="\n")

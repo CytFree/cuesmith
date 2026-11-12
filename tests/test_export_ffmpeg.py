@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.export import dump_ass, dump_bilingual_srt, dump_txt, dump_vtt
-from submatrix.srt import Cue, Subtitle, Timing, dump_srt, parse_srt
-from submatrix.textutil import visible_text
+from cuesmith.export import dump_ass, dump_bilingual_srt, dump_txt, dump_vtt
+from cuesmith.srt import Cue, Subtitle, Timing, dump_srt, parse_srt
+from cuesmith.textutil import visible_text
 from tests.support import FFMPEG, FFPROBE, requires_media_tools
 
 pytestmark = requires_media_tools

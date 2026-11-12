@@ -1,4 +1,4 @@
-"""阿里云百炼（DashScope）同步语音合成 worker —— 给 ``submatrix dub --tts-command`` 调用。
+"""阿里云百炼（DashScope）同步语音合成 worker —— 给 ``cuesmith dub --tts-command`` 调用。
 
 一次调用合成一条字幕：
 
@@ -272,7 +272,7 @@ def create_voice(
         raise DashScopeError("prefix 只能包含数字/英文字母，且不超过 10 个字符")
     url, _source = resolve_base_url(base_url, workspace_id)
     key = _api_key(api_key)
-    work_dir = Path(tempfile.mkdtemp(prefix="submatrix-voice-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="cuesmith-voice-"))
     normalized = normalize_reference(Path(audio_path), work_dir / "reference.wav")
     try:
         payload = {

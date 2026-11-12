@@ -1,4 +1,4 @@
-"""命令行入口：``python -m submatrix build|probe|asr|translate|merge|diarize|dub|burn|mark|pipeline|cost|gui ...``
+"""命令行入口：``python -m cuesmith build|probe|asr|translate|merge|diarize|dub|burn|mark|pipeline|cost|gui ...``
 
 退出码契约（给脚本/CI 用）：
 - ``0`` 通过（允许只有 warning；probe 的"需要 ASR"也算成功）
@@ -98,7 +98,7 @@ def build_parser() -> _Parser:
     """
 
     parser = _Parser(
-        prog="submatrix",
+        prog="cuesmith",
         description=(
             "视频字幕工具（FR-1 探测与内封字幕直出 / FR-2 字幕文件矩阵 + CPS 校验"
             " / FR-3 配音编排 / FR-4 AIGC 标识）"
@@ -1489,11 +1489,11 @@ def _run_gui(args: argparse.Namespace) -> int:
         # （spec.loader 为空说明只是同名目录/命名空间包，不能当 gradio 用）
         repo_root = Path(__file__).resolve().parent.parent
         venv_python = repo_root / "spike" / "gui" / ".venv" / "Scripts" / "python.exe"
-        if venv_python.is_file() and not os.environ.get("SUBMATRIX_GUI_REEXEC"):
+        if venv_python.is_file() and not os.environ.get("CUESMITH_GUI_REEXEC"):
             command = [
                 str(venv_python),
                 "-m",
-                "submatrix",
+                "cuesmith",
                 "gui",
                 "--host",
                 args.host,
@@ -1504,7 +1504,7 @@ def _run_gui(args: argparse.Namespace) -> int:
                 command.append("--no-browser")
             for allowed in args.allowed_path or []:
                 command += ["--allowed-path", str(allowed)]
-            env = dict(os.environ, SUBMATRIX_GUI_REEXEC="1")
+            env = dict(os.environ, CUESMITH_GUI_REEXEC="1")
             return subprocess.call(command, cwd=str(repo_root), env=env)
         print(
             "GUI 需要 gradio：先执行 `pip install gradio`，"

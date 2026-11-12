@@ -12,7 +12,7 @@
 1. **全量目录**来自本机 ``edge-tts``（``edge_tts.list_voices()``，322 条），只保留
    中/英与多语言音色，缓存到 ``work/voices/edge-voices.json``（默认 30 天）；
 2. **离线兜底**是一张精选静态表（中英常用音色），没装/没网时下拉仍然可用；
-3. 试听直接复用 :class:`submatrix.tts.EdgeTtsEngine` 合成一句样音，按音色+文本指纹
+3. 试听直接复用 :class:`cuesmith.tts.EdgeTtsEngine` 合成一句样音，按音色+文本指纹
    缓存，重复点不重复合成。
 
 这一层不碰配音编排：``dub``/``pipeline`` 仍然只认 voice id 字符串。
@@ -157,7 +157,7 @@ def _repo_root() -> Path:
 
 
 def _cache_path() -> Path:
-    configured = os.environ.get("SUBMATRIX_VOICE_CACHE")
+    configured = os.environ.get("CUESMITH_VOICE_CACHE")
     if configured:
         return Path(os.path.expandvars(os.path.expanduser(configured)))
     return _repo_root() / "work" / "voices" / "edge-voices.json"

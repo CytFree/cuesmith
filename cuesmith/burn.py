@@ -392,7 +392,7 @@ def _write_outputs(session: _BurnSession) -> BurnResult:
     out_size, out_sha = file_digest(session.out_video)
     report: dict[str, object] = {
         "schema_version": 1,
-        "tool": "submatrix",
+        "tool": "cuesmith",
         "version": __version__,
         "command": "burn",
         "generated_at": (

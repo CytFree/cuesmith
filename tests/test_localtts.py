@@ -1,4 +1,4 @@
-"""``submatrix.localtts`` 单测：**不 import sherpa、不依赖真实模型/网络/子进程**。
+"""``cuesmith.localtts`` 单测：**不 import sherpa、不依赖真实模型/网络/子进程**。
 
 worker 子进程用假 ``subprocess.Popen`` 替代（stdin/stdout 是线程安全的假管道），
 覆盖：ready 握手、请求 JSON 字段、时长回传、ok:false、进程 EOF/死亡后自动重启、
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import localtts
+from cuesmith import localtts
 
 # ---------------------------------------------------------------------------
 # 假子进程
@@ -518,7 +518,7 @@ def test_engine_records_resolved_voice(fake_proc, tmp_path):
 
 
 def test_worker_speaker_tables_stay_in_sync():
-    from submatrix import tts_worker
+    from cuesmith import tts_worker
 
     assert tts_worker.KOKORO_SPEAKERS == localtts.KOKORO_SPEAKERS
     assert len(localtts.KOKORO_SPEAKERS) == 54

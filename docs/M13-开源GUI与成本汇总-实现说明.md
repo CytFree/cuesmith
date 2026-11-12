@@ -14,7 +14,7 @@
 | 项 | 决定 |
 |---|---|
 | GUI 技术 | **Gradio 6.30.0**（开源、单文件、自带日志/文件/表格组件），装在独立 venv `spike/gui/.venv`，不污染主环境 |
-| GUI 边界 | **只做壳**：表单 → `python -m submatrix pipeline ...` 子进程 → 实时日志/产物/成本表；不 import 任何业务模块 |
+| GUI 边界 | **只做壳**：表单 → `python -m cuesmith pipeline ...` 子进程 → 实时日志/产物/成本表；不 import 任何业务模块 |
 | 成本口径 | **artifact（产物累计）**：按当前产物报告算总花费，缓存重跑数字不变；`--force`/`--regenerate-tts` 重跑不累计历史账单 |
 | 成本数据源 | 只读 `translate/translate.json`（token 用量）与 `dub/dub_report.json`（字符/复用/失败），不联网、不调服务商账单 |
 | 币种 | 分项保留原币种（CNY/USD），展示金额按 `fx` 汇率折算；缺汇率如实标注、不硬编 |
@@ -34,7 +34,7 @@
 
 ### 2.2 定价（价表）
 
-内置示例价表在 `submatrix/cost.py` 的 `DEFAULT_PRICING`：
+内置示例价表在 `cuesmith/cost.py` 的 `DEFAULT_PRICING`：
 
 | 渠道 | 单价 | 币种 |
 |---|---|---|
@@ -88,14 +88,14 @@
 
 ```powershell
 # pipeline 自动写 cost 块并在摘要里打一行
-python -m submatrix pipeline --src in.mp4 --out out --llm --tts-command "...{voice_id}..."
+python -m cuesmith pipeline --src in.mp4 --out out --llm --tts-command "...{voice_id}..."
 # 成本：≈¥0.02924（LLM 720 tokens，TTS 268 字符；按价表估算）
 
 # 单独查/换价表重算
-python -m submatrix cost --work out
-python -m submatrix cost --work out --json
-python -m submatrix cost --work out --pricing my-pricing.json --json
-python -m submatrix cost --work old-out --tts-command "tools\tts_dashscope.py"   # 旧产物补识别
+python -m cuesmith cost --work out
+python -m cuesmith cost --work out --json
+python -m cuesmith cost --work out --pricing my-pricing.json --json
+python -m cuesmith cost --work old-out --tts-command "tools\tts_dashscope.py"   # 旧产物补识别
 ```
 
 ### 2.5 真实数据
@@ -113,12 +113,12 @@ python -m submatrix cost --work old-out --tts-command "tools\tts_dashscope.py"  
 
 ## 3. 开源 GUI 薄壳
 
-### 3.1 结构（`submatrix/gui.py`，约 310 行）
+### 3.1 结构（`cuesmith/gui.py`，约 310 行）
 
 ```
 表单（视频路径/上传、输出目录、源/目标语言、功能勾选、音色、高级参数、API Key）
   → build_argv()：拼成 pipeline CLI 参数（额外参数 shlex 透传）
-  → subprocess.Popen([sys.executable, "-u", "-m", "submatrix", "pipeline", ...])
+  → subprocess.Popen([sys.executable, "-u", "-m", "cuesmith", "pipeline", ...])
   → 生成器逐行 yield 日志（Gradio Textbox 实时滚动）
   → 读 pipeline.json：output_files() 产物下载 + read_cost() → cost_rows() 表格
 ```
@@ -136,14 +136,14 @@ python -m submatrix cost --work old-out --tts-command "tools\tts_dashscope.py"  
 
 ```powershell
 # 仓库自带 GUI venv（本次安装 gradio 6.30.0）
-python -m submatrix gui                  # 系统 Python 会自动重入 spike\gui\.venv
-python -m submatrix gui --port 7860 --no-browser
+python -m cuesmith gui                  # 系统 Python 会自动重入 spike\gui\.venv
+python -m cuesmith gui --port 7860 --no-browser
 # 或手动
-spike\gui\.venv\Scripts\python -m submatrix gui
+spike\gui\.venv\Scripts\python -m cuesmith gui
 ```
 
-`python -m submatrix gui` 会检查当前解释器的 gradio：没有（或只是同名命名空间目录）时，
-自动用 `spike/gui/.venv/Scripts/python.exe` 重入并置 `SUBMATRIX_GUI_REEXEC=1` 防循环。
+`python -m cuesmith gui` 会检查当前解释器的 gradio：没有（或只是同名命名空间目录）时，
+自动用 `spike/gui/.venv/Scripts/python.exe` 重入并置 `CUESMITH_GUI_REEXEC=1` 防循环。
 
 ### 3.3 依赖
 
@@ -160,7 +160,7 @@ spike\gui\.venv\Scripts\python -m submatrix gui
 | 一键回归 | **27/27 通过，43.2s** |
 | CLI 帮助 | `--help` 已列出 `cost` / `gui` 及说明 |
 | GUI 无头冒烟 | `tools/gui_smoke.py`：gradio 6.30.0，HTTP **200**，43,295 bytes，随机端口，自动关闭 |
-| 系统 Python 启动 | `python -m submatrix gui --no-browser --port 7863`：自动重入 venv → HTTP **200**（约 14s，含 Gradio 6 SSR 预热） |
+| 系统 Python 启动 | `python -m cuesmith gui --no-browser --port 7863`：自动重入 venv → HTTP **200**（约 14s，含 Gradio 6 SSR 预热） |
 | GUI 端到端 | `stream_run` 实跑 `work/multi-speaker/demo2.mp4`（zh→en，stop-after build，`--provider echo`）：状态"完成"，产出 5 个文件，成本表显示"无外部计费调用"（¥0） |
 | 真实成本 | `cost --work work/dashscope/multi`：582/138 tokens、268 字符、**≈¥0.02924**，与 `cost --tts-command ...` 重算一致 |
 | 缓存一致性 | 真实产物全缓存重跑 0.1s，cost 数字不变 |
@@ -180,10 +180,10 @@ spike\gui\.venv\Scripts\python -m submatrix gui
 
 | 文件 | 变更 |
 |---|---|
-| `submatrix/cost.py` | 新增：抽量/价表/出账/CLI 文本/GUI 行 |
-| `submatrix/gui.py` | 新增：Gradio Blocks + `build_argv` + `stream_run` + `serve` |
-| `submatrix/cli.py` | `pipeline --pricing`；新增 `cost` / `gui` 子命令；摘要打印成本行 |
-| `submatrix/pipeline.py` | `PipelineOptions.pricing`；报告写 `cost` 块；`_finish` 计算成本 |
+| `cuesmith/cost.py` | 新增：抽量/价表/出账/CLI 文本/GUI 行 |
+| `cuesmith/gui.py` | 新增：Gradio Blocks + `build_argv` + `stream_run` + `serve` |
+| `cuesmith/cli.py` | `pipeline --pricing`；新增 `cost` / `gui` 子命令；摘要打印成本行 |
+| `cuesmith/pipeline.py` | `PipelineOptions.pricing`；报告写 `cost` 块；`_finish` 计算成本 |
 | `tests/test_cost.py` | 新增 23 个 |
 | `tests/test_gui.py` | 新增 11 个 |
 | `tests/test_pipeline.py` | 断言 cost 块与 `config.pricing` |

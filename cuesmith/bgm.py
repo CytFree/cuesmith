@@ -123,7 +123,7 @@ _DEMUCS_PYTHON = Requirement(
     parameter="--separator-python",
     # 候选链（含环境变量）由 demucs_candidates 统一给，这里只管报错措辞
     hint="只在保留 BGM 时需要：把 demucs 装进 spike/demucs/.venv，"
-    "或设置环境变量 SUBMATRIX_DEMUCS_PYTHON。",
+    "或设置环境变量 CUESMITH_DEMUCS_PYTHON。",
 )
 
 
@@ -133,7 +133,7 @@ def demucs_candidates(*explicit: str | None) -> list[str]:
     project = Path(__file__).resolve().parent.parent
     return ordered_candidates(
         explicit,
-        (os.environ.get("SUBMATRIX_DEMUCS_PYTHON"),),
+        (os.environ.get("CUESMITH_DEMUCS_PYTHON"),),
         python_in_venv(project / "spike" / "demucs" / ".venv"),
         (sys.executable,),
     )
@@ -223,7 +223,7 @@ def _extract_audio(source: Path, out_wav: Path) -> Path:
 def torch_home() -> Path:
     """模型权重的落地目录：默认放项目内，避免写到用户目录（也便于离线复跑）。"""
 
-    env = os.environ.get("SUBMATRIX_TORCH_HOME")
+    env = os.environ.get("CUESMITH_TORCH_HOME")
     if env:
         return Path(env)
     return Path(__file__).resolve().parent.parent / "spike" / "demucs" / ".torch"

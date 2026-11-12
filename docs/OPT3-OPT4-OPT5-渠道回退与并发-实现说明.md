@@ -174,11 +174,11 @@
 
 | 文件 | 改动 |
 |---|---|
-| `submatrix/translate.py` | `ResilientTranslator`、`_fallback_chain`、`_provider_name`、`TranslateOptions.fallback_provider/concurrency`、段落/批次并发、报告字段（provider/provider_primary/provider_fallback/concurrency） |
-| `submatrix/dub.py` | 音色降级（`VOICE_ERROR_HINTS`/`_looks_like_voice_error`/`voice_downgrades`）、二次补跑、`concurrency` 默认 6→10 |
-| `submatrix/diarize.py` | `segments.json`（`write_segments`/`load_segments`）、`attach_speakers()`（分段与字幕归属解耦） |
-| `submatrix/pipeline.py` | `translate_fallback` / `translate_concurrency` 选项与校验、传参、报告 config；ASR 期间后台预取 diarize 分段（`_BackgroundJob`/`_start_diarize_segments`）并在 ASR 后 `attach_speakers`；`--regenerate-tts` 现在会让 dub 缓存失效（顺带修的 bug） |
-| `submatrix/cli.py` | `translate --fallback-provider/--concurrency`、`pipeline --translate-fallback/--translate-concurrency`、`--concurrency` 默认 10 |
+| `cuesmith/translate.py` | `ResilientTranslator`、`_fallback_chain`、`_provider_name`、`TranslateOptions.fallback_provider/concurrency`、段落/批次并发、报告字段（provider/provider_primary/provider_fallback/concurrency） |
+| `cuesmith/dub.py` | 音色降级（`VOICE_ERROR_HINTS`/`_looks_like_voice_error`/`voice_downgrades`）、二次补跑、`concurrency` 默认 6→10 |
+| `cuesmith/diarize.py` | `segments.json`（`write_segments`/`load_segments`）、`attach_speakers()`（分段与字幕归属解耦） |
+| `cuesmith/pipeline.py` | `translate_fallback` / `translate_concurrency` 选项与校验、传参、报告 config；ASR 期间后台预取 diarize 分段（`_BackgroundJob`/`_start_diarize_segments`）并在 ASR 后 `attach_speakers`；`--regenerate-tts` 现在会让 dub 缓存失效（顺带修的 bug） |
+| `cuesmith/cli.py` | `translate --fallback-provider/--concurrency`、`pipeline --translate-fallback/--translate-concurrency`、`--concurrency` 默认 10 |
 | `tests/*` | +16 条（translate +6、dub +4、translate 并发 +2、diarize 分段/归属 +3、pipeline 并行 +2 等） |
 
 GUI 不需要改：新开关都可走「额外参数」；默认值已按「免费 MT 4 并发、Edge 10 并发」设好。
@@ -189,7 +189,7 @@ GUI 不需要改：新开关都可走「额外参数」；默认值已按「免�
 
 ```powershell
 # OPT-3：模拟渠道失败（单测已覆盖真实注入）；真实端不可控，只能验证开关
-python -m submatrix translate --src work\real-samples\opt-en-10min-v2\merge\merged.srt `
+python -m cuesmith translate --src work\real-samples\opt-en-10min-v2\merge\merged.srt `
   --out work\real-samples\opt5-translate-c4 --src-lang en --tgt-lang zh --concurrency 4
 # 期望：耗时约 19s（串行约 47s），译文与串行逐字节一致
 
@@ -197,13 +197,13 @@ python -m submatrix translate --src work\real-samples\opt-en-10min-v2\merge\merg
 python -m pytest tests/test_dub.py -k "downgrade or dead_voice" -q
 
 # OPT-5：配音并发对比（--regenerate-tts 强制重新合成，注意 Edge 端点抖动）
-python -m submatrix pipeline --src work\real-samples\podcast\en-podcast-10min.mp4 `
+python -m cuesmith pipeline --src work\real-samples\podcast\en-podcast-10min.mp4 `
   --out work\real-samples\opt5-dub3-c10 --src-lang en --tgt-lang zh --diarize --speakers 3 `
   --stop-after dub --regenerate-tts --concurrency 10
 # 期望：dub 约 150-200s（并发 6 约 220s），失败 0-1 条；看 dub_report.json 的 config.concurrency
 
 # OPT-5：ASR 与 diarize 并行（源语言必须显式给，auto 不预取）
-python -m submatrix pipeline --src work\real-samples\podcast\en-podcast-10min.mp4 `
+python -m cuesmith pipeline --src work\real-samples\podcast\en-podcast-10min.mp4 `
   --out work\real-samples\opt5-parallel-10min --src-lang en --tgt-lang zh --diarize --speakers 3
 # 期望：diarize 阶段墙钟接近 0（summary.parallel_with_asr = true），总耗时比串行少 ~85s
 ```

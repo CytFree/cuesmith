@@ -18,7 +18,7 @@
 
 | 项 | 状态 | 说明 |
 |---|---|---|
-| 音色目录 | ✅ | `submatrix/voices.py`：本机 `edge_tts.list_voices()` 全量拉取，只留 zh/en/多语言 |
+| 音色目录 | ✅ | `cuesmith/voices.py`：本机 `edge_tts.list_voices()` 全量拉取，只留 zh/en/多语言 |
 | 离线兜底 | ✅ | 精选静态表（中英常用 50 条），没装 edge-tts / 没网时下拉仍可用 |
 | 下拉选择 | ✅ | 标签 `zh-CN-XiaoxiaoNeural · 晓晓·女声`；第一项「默认（按目标语言）」；`allow_custom_value` 仍可手输 |
 | 试听 | ✅ | 真实合成一句目标语言样音，页面内 `gr.Audio` 播放；同名音色+文本复用缓存 |
@@ -30,7 +30,7 @@
 | 音色克隆/音色市场 | ❌ | 不做；云端复刻仍走 M12 的 `--tts-command`（在「额外参数」里透传） |
 | 音色风格/情感参数 | ❌ | 不做；`--tts-rate` 等仍走额外参数 |
 
-## 2. `submatrix/voices.py`
+## 2. `cuesmith/voices.py`
 
 ### 2.1 数据来源与缓存
 
@@ -42,7 +42,7 @@ work/voices/edge-voices.json   # {schema_version, fetched_at, source, voices[]}
 
 - 默认 TTL 30 天；新鲜缓存直接用，过期先尝试刷新；
 - 刷新失败 → **先用旧缓存**，没有旧缓存才退回静态表（保证下拉永远有内容）；
-- 缓存路径可用环境变量 `SUBMATRIX_VOICE_CACHE` 覆盖（测试/多环境用）；
+- 缓存路径可用环境变量 `CUESMITH_VOICE_CACHE` 覆盖（测试/多环境用）；
 - 静态表含中文昵称（晓晓/云希/晓伊…）、性别与多语言标记，作为标签排序依据。
 
 ### 2.2 对外接口
@@ -57,7 +57,7 @@ work/voices/edge-voices.json   # {schema_version, fetched_at, source, voices[]}
 
 试听文本按目标语言：中文「你好，这是配音试听……」，英文「Hello, this is a voice preview……」。
 
-## 3. `submatrix/gui.py` 改造
+## 3. `cuesmith/gui.py` 改造
 
 ### 3.1 界面
 
@@ -112,7 +112,7 @@ _run_and_view()  # 批量结果 / 成本 / 产物 / 说话人表 / 音色输入�
 - `build_app()` 在 `spike/gui/.venv`（gradio 6.30.0）可构建：**51 blocks / 5 handlers**。
 ## 5. 本地真实测试（GUI 7860，经 gradio_client 打真实接口）
 
-启动：`spike\gui\.venv\Scripts\python.exe -m submatrix gui --no-browser --port 7860`，
+启动：`spike\gui\.venv\Scripts\python.exe -m cuesmith gui --no-browser --port 7860`，
 HTTP 200。测试脚本 `work/m16-real/gui_real_test.py`（不进产品代码）。
 
 ### 5.1 试听（`/preview_voice_ui`）
@@ -213,8 +213,8 @@ threshold 0.8 会过分割成 5 人。GUI 想自动判断时，可在「额外�
 
 ## 6. 涉及文件
 
-- 新增 `submatrix/voices.py`、`tests/test_voices.py`、本文件；
-- 修改 `submatrix/gui.py`（音色下拉/试听/多人声色/说话人表/重配，`_run_plans` 抽取，
+- 新增 `cuesmith/voices.py`、`tests/test_voices.py`、本文件；
+- 修改 `cuesmith/gui.py`（音色下拉/试听/多人声色/说话人表/重配，`_run_plans` 抽取，
   `_table_rows()` 兼容 DataFrame）、`tests/test_gui.py`（输入顺序 17、输出 8 元组、
   重配测试、DataFrame 回归）；
 - 真实测试产物：`work/gui/m16-real-demo2-20261030-164939/`（成片/字幕/报告）、

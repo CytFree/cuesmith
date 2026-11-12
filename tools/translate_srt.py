@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from submatrix.srt import Cue, Subtitle, dump_srt, load_srt  # noqa: E402
+from cuesmith.srt import Cue, Subtitle, dump_srt, load_srt  # noqa: E402
 
 URL = "https://edge.microsoft.com/translate/translatetext?from={src}&to={tgt}&isEnterpriseClient=false"
 BATCH = 50  # 一次 POST 多条，减少往返

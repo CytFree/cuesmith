@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from submatrix import voices
-from submatrix.voices import DEFAULT_LABEL, Voice, VoicesError
+from cuesmith import voices
+from cuesmith.voices import DEFAULT_LABEL, Voice, VoicesError
 
 
 def _completed(stdout: str, code: int = 0):

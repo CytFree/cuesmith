@@ -34,7 +34,7 @@
 ≥0.9（en 只丢 1–7 个 turn）。**伪簇不是来自"纯静音"，而是来自音乐里的人声/笑声**——
 这类段 VAD 也判成语音，所以"后过滤"没用；必须让它们**根本不进**分割/聚类。
 
-### 2.2 实现（`submatrix/diarize_worker.py`）
+### 2.2 实现（`cuesmith/diarize_worker.py`）
 
 1. `_vad_intervals()`：silero VAD（`spike/diarization/models/vad/silero_vad.onnx`，643KB）扫全片，
    参数 `threshold=0.5 / min_silence=0.25s / min_speech=0.25s / max_speech=30s`；
@@ -44,9 +44,9 @@
 4. `_map_segments_back()`：把分段映射回原时间轴，**跨多个语音段的 turn 按段拆开**——
    否则 turn 会把被丢掉的音乐区间也"覆盖"了，覆盖率虚高、字幕归属被拉偏。
 
-主进程 `submatrix/diarize.py` 的变化：
+主进程 `cuesmith/diarize.py` 的变化：
 
-- `find_vad_model()`：显式 `--vad-model` > `SUBMATRIX_DIARIZATION_VAD` > 项目内默认路径；
+- `find_vad_model()`：显式 `--vad-model` > `CUESMITH_DIARIZATION_VAD` > 项目内默认路径；
   没装模型时 **不报错**（VAD 只是优化），报告 `config.vad.skipped="model-missing"`；
 - `DiarizeOptions.vad / vad_model / vad_threshold`（默认开、0.5）；
 - 报告新增 `config.vad{mode:"compact"}` 与 `summary.vad{segments, speech_s, speech_pct, removed_s, elapsed_s, model_input_s}`，
@@ -187,22 +187,22 @@ $gh = "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/downl
 curl.exe -L -o "spike/diarization/models/vad/silero_vad.onnx" "$gh/asr-models/silero_vad.onnx"
 
 # 默认：VAD 预过滤 + 自动二次聚类
-python -m submatrix diarize --src work/real-samples/podcast/en-podcast-10min.mp4 `
+python -m cuesmith diarize --src work/real-samples/podcast/en-podcast-10min.mp4 `
   --srt work/real-samples/run-en-10min/asr/source.srt --out work/real-samples/opt7b-en-10min --src-lang en
 
 # 关掉 VAD / 关掉二次聚类 / 显式人数 / 调阈值
-python -m submatrix diarize --src in.mp4 --out out --src-lang zh --no-vad
-python -m submatrix diarize --src in.mp4 --out out --src-lang zh --clustering sherpa
-python -m submatrix diarize --src in.mp4 --out out --src-lang zh --speakers 4
-python -m submatrix diarize --src in.mp4 --out out --src-lang zh --merge-alpha 0.5
+python -m cuesmith diarize --src in.mp4 --out out --src-lang zh --no-vad
+python -m cuesmith diarize --src in.mp4 --out out --src-lang zh --clustering sherpa
+python -m cuesmith diarize --src in.mp4 --out out --src-lang zh --speakers 4
+python -m cuesmith diarize --src in.mp4 --out out --src-lang zh --merge-alpha 0.5
 
 # pipeline 同款开关：--vad/--no-vad / --clustering / --merge-alpha / --vad-threshold
 ```
 
 ## 7. 产物索引
 
-- 代码：`submatrix/diarize_worker.py`（VAD 拼接/回映射、embedding 二次聚类）、
-  `submatrix/diarize.py`（模型定位/选项/报告/缓存字段）、`submatrix/cli.py`、`submatrix/pipeline.py`；
+- 代码：`cuesmith/diarize_worker.py`（VAD 拼接/回映射、embedding 二次聚类）、
+  `cuesmith/diarize.py`（模型定位/选项/报告/缓存字段）、`cuesmith/cli.py`、`cuesmith/pipeline.py`；
 - 单测：`tests/test_diarize.py`（+14）、`tests/test_pipeline.py`（+3）；
 - 实测产物：`work/real-samples/opt7b-en-10min/`、`opt7b-zh-4p/`、`opt7b-zh-3p/`、
   `opt7b-zh-press/`、`opt7b-zh-60s/`、`opt7b-demo2/`、`opt7b-pipe-zh-60s/`；

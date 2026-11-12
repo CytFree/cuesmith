@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from submatrix.srt import Cue, Subtitle, Timing
-from submatrix.validate import (
+from cuesmith.srt import Cue, Subtitle, Timing
+from cuesmith.validate import (
     LANG_PROFILES,
     Finding,
     Limits,

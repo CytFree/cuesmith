@@ -1,4 +1,4 @@
-"""本地 TTS 引擎（主包侧）：只用标准库，把 sherpa-onnx 关在 ``submatrix/tts_worker.py`` 子进程里。
+"""本地 TTS 引擎（主包侧）：只用标准库，把 sherpa-onnx 关在 ``cuesmith/tts_worker.py`` 子进程里。
 
 PRD 锁定主包依赖为"标准库 + ffmpeg"，而 sherpa-onnx / onnxruntime / numpy 版本敏感且体积大，
 所以本地 TTS 采用与 ASR/说话人分离相同的**常驻 worker** 模式：
@@ -53,8 +53,8 @@ __all__ = [
     "resolve_local_voice",
 ]
 
-ENV_PYTHON = "SUBMATRIX_LOCAL_TTS_PYTHON"
-ENV_MODEL = "SUBMATRIX_LOCAL_TTS_MODEL"
+ENV_PYTHON = "CUESMITH_LOCAL_TTS_PYTHON"
+ENV_MODEL = "CUESMITH_LOCAL_TTS_MODEL"
 
 _LOCAL_TTS_PYTHON = Requirement(
     label="sherpa-onnx",
@@ -73,7 +73,7 @@ DEFAULT_MODEL_CANDIDATES = (
 
 WORKER_SCRIPT = Path(__file__).with_name("tts_worker.py")
 
-# 与 submatrix/tts_worker.py 的 KOKORO_SPEAKERS 保持一致（顺序 = model.onnx 里的
+# 与 cuesmith/tts_worker.py 的 KOKORO_SPEAKERS 保持一致（顺序 = model.onnx 里的
 # speaker_names / id2speaker：0 af_alloy … 53 em_santa，中文 45–52）。
 KOKORO_SPEAKERS = (
     "af_alloy",
@@ -201,7 +201,7 @@ def find_local_tts_python(
 ) -> str:
     """找第一个能 ``import sherpa_onnx`` 的解释器。
 
-    顺序：显式 ``--local-tts-python`` → 环境变量 ``SUBMATRIX_LOCAL_TTS_PYTHON`` →
+    顺序：显式 ``--local-tts-python`` → 环境变量 ``CUESMITH_LOCAL_TTS_PYTHON`` →
     仓库已知 venv（``spike/diarization/.venv``：装了 sherpa-onnx 的那个）→ 当前解释器。
     显式值与环境变量**不做探测**（尊重用户配置，真跑不通时 worker 启动错误会带出
     ``ModuleNotFoundError`` 与可操作提示）；自动探测全部失败时抛 :class:`LocalTtsError`。
@@ -236,7 +236,7 @@ def find_local_tts_model(
     """定位本地 TTS 模型目录（含 ``model.onnx``）。
 
     顺序：显式路径（必须存在且含 ``model.onnx``，否则抛错）→ 环境变量
-    ``SUBMATRIX_LOCAL_TTS_MODEL`` → 仓库默认候选（kokoro 多语 → MeloTTS 中英）。
+    ``CUESMITH_LOCAL_TTS_MODEL`` → 仓库默认候选（kokoro 多语 → MeloTTS 中英）。
     都没有时返回 ``None``（调用方回退 Edge-TTS）。
     """
 

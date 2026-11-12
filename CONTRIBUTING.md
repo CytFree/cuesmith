@@ -16,14 +16,14 @@ python -m pytest -q                  # 858 个用例（854 通过 / 4 按需跳�
 ```
 
 主包零第三方运行时依赖（只用标准库 + 外部 ffmpeg）。ASR / TTS / 说话人分离 / BGM 分离 /
-GUI 的依赖各自装在 `spike/*/.venv` 里，通过子进程调用——**不要**把它们 import 进 `submatrix/`。
+GUI 的依赖各自装在 `spike/*/.venv` 里，通过子进程调用——**不要**把它们 import 进 `cuesmith/`。
 
 想跑真实素材回归（默认跳过）：
 
 ```powershell
-$env:SUBMATRIX_REAL_VIDEO = "D:\...\你的视频.mp4"
-$env:SUBMATRIX_REAL_OUT   = "work/cctv-demo"     # 已有产物树
-$env:SUBMATRIX_REAL_E2E   = "1"                  # 全链路（约 3–5 分钟，含真 ASR）
+$env:CUESMITH_REAL_VIDEO = "D:\...\你的视频.mp4"
+$env:CUESMITH_REAL_OUT   = "work/cctv-demo"     # 已有产物树
+$env:CUESMITH_REAL_E2E   = "1"                  # 全链路（约 3–5 分钟，含真 ASR）
 python -m pytest tests/test_real_sample.py -q -m slow
 ```
 
@@ -34,8 +34,8 @@ python -m pytest tests/test_real_sample.py -q -m slow
 
 ```powershell
 python -m pytest -q                     # 全量（含 tests/test_structure.py 的 10 条结构检查）
-python -m ruff check submatrix tests    # 必须 0（E4/E7/E9/F/I/UP；F 即原 pyflakes）
-python -m pytest -q --cov=submatrix --cov-fail-under=80   # 改了较大一块逻辑时
+python -m ruff check cuesmith tests    # 必须 0（E4/E7/E9/F/I/UP；F 即原 pyflakes）
+python -m pytest -q --cov=cuesmith --cov-fail-under=80   # 改了较大一块逻辑时
 ```
 
 ## 改代码时的三条硬要求

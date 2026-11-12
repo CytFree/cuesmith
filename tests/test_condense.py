@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from submatrix.condense import CondenseResult, condense_text, estimate_max_chars
+from cuesmith.condense import CondenseResult, condense_text, estimate_max_chars
 
 
 def test_estimate_max_chars_uses_cps_and_duration() -> None:

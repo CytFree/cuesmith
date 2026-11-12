@@ -1,4 +1,4 @@
-"""faster-whisper 工作进程：由 ``submatrix asr`` 用"装有 faster-whisper 的 Python"拉起。
+"""faster-whisper 工作进程：由 ``cuesmith asr`` 用"装有 faster-whisper 的 Python"拉起。
 
 为什么不直接在 CLI 进程里 import：主包只依赖标准库 + ffmpeg（PRD 锁定），ASR 依赖
 ctranslate2 / onnxruntime，版本敏感（4.8.x 在 Windows 上会访问违例，M0 已踩），必须隔离在
@@ -22,7 +22,7 @@ from pathlib import Path
 
 if __package__:
     from . import worker_protocol as protocol
-else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
+else:  # 脚本直跑：sys.path[0] 是 cuesmith/，只能按顶层模块导入
     import worker_protocol as protocol
 
 

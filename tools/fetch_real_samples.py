@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 API = "https://commons.wikimedia.org/w/api.php"
-UA = {"User-Agent": "submatrix-research/0.1 (offline pipeline test material)"}
+UA = {"User-Agent": "cuesmith-research/0.1 (offline pipeline test material)"}
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "work" / "real-samples"
 

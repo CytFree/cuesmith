@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from submatrix.history import (
+from cuesmith.history import (
     HISTORY_HEADERS,
     STATUS_LABELS,
     HistoryError,
@@ -26,13 +26,13 @@ from submatrix.history import (
 
 
 def test_history_db_path_resolution(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.delenv("SUBMATRIX_HISTORY_DB", raising=False)
+    monkeypatch.delenv("CUESMITH_HISTORY_DB", raising=False)
     assert history_db_path().name == "history.db"
 
     explicit = tmp_path / "custom.db"
     assert history_db_path(explicit) == explicit
 
-    monkeypatch.setenv("SUBMATRIX_HISTORY_DB", str(tmp_path / "env.db"))
+    monkeypatch.setenv("CUESMITH_HISTORY_DB", str(tmp_path / "env.db"))
     assert history_db_path() == tmp_path / "env.db"
 
 
@@ -51,7 +51,7 @@ def test_store_add_get_finish_and_rows(tmp_path: Path) -> None:
         source=r"D:\videos\a.mp4",
         out_dir=r"D:\out\a",
         settings={"src_lang": "zh", "features": {"dub", "burn"}, "glossary": Path("terms.json")},
-        argv=["-m", "submatrix", "pipeline", "--src", r"D:\videos\a.mp4"],
+        argv=["-m", "cuesmith", "pipeline", "--src", r"D:\videos\a.mp4"],
     )
 
     task = store.get_task(task_id)
@@ -60,7 +60,7 @@ def test_store_add_get_finish_and_rows(tmp_path: Path) -> None:
     assert task["created_at"] and task["updated_at"]
     assert task["settings"]["features"] == ["burn", "dub"]  # set → 排序后的 list
     assert task["settings"]["glossary"] == "terms.json"  # Path → str
-    assert task["argv"][:3] == ["-m", "submatrix", "pipeline"]
+    assert task["argv"][:3] == ["-m", "cuesmith", "pipeline"]
     assert store.count() == 1
 
     store.finish_task(
@@ -152,7 +152,7 @@ def test_history_rows_empty_and_headers() -> None:
 
 
 def test_cli_history_lists_and_deletes(tmp_path: Path, capsys) -> None:
-    from submatrix.cli import main
+    from cuesmith.cli import main
 
     db = tmp_path / "cli.db"
     store = HistoryStore(db)

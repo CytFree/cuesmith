@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import pytest
 
-from submatrix.layout import (
+from cuesmith.layout import (
     FUNCTION_WORDS,
     LayoutOptions,
     layout_pair,
     wrap_text,
 )
-from submatrix.srt import Cue, Subtitle, Timing
+from cuesmith.srt import Cue, Subtitle, Timing
 
 
 def sub(*pairs: tuple[int, int, str]) -> Subtitle:

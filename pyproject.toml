@@ -1,7 +1,7 @@
 [project]
-name = "submatrix"
+name = "cuesmith"
 version = "0.1.0"
-description = "视频字幕矩阵工具：内封字幕探测、字幕文件矩阵导出、CPS 校验、配音编排、AIGC 标识"
+description = "字幕工坊：一条命令把视频变成带硬字幕与 AIGC 标识的成片（字幕探测/ASR/翻译/说话人分离/配音/烧录）"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
@@ -22,10 +22,10 @@ classifiers = [
 
 [project.urls]
 # 发布到 GitHub 时把 OWNER 换成实际账号（现在是占位，不写死假地址）
-Repository = "https://github.com/OWNER/submatrix"
+Repository = "https://github.com/OWNER/cuesmith"
 
 [project.scripts]
-submatrix = "submatrix.cli:main"
+cuesmith = "cuesmith.cli:main"
 
 [project.optional-dependencies]
 # 本地 Web GUI（Gradio 薄壳）：不装也能用全部 CLI 功能
@@ -38,7 +38,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["submatrix"]
+packages = ["cuesmith"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -48,7 +48,7 @@ addopts = "-q"
 markers = ["slow: 真实素材或耗时用例，默认不跑"]
 
 [tool.coverage.run]
-source = ["submatrix"]
+source = ["cuesmith"]
 
 [tool.coverage.report]
 show_missing = true
