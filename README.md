@@ -139,7 +139,7 @@ BGM 保留（demucs + torch CPU）的安装命令见
 ### 3.5 装完自检
 
 ```powershell
-python -m pytest -q                          # 838 passed, 4 skipped
+python -m pytest -q                          # 848 passed, 4 skipped
 python tools\run_samples.py --out work\regression   # 27/27
 spike\gui\.venv\Scripts\python.exe tools\gui_smoke.py   # GUI HTTP 200
 ```
@@ -306,6 +306,7 @@ docs/                 除本 README 外的全部文档：需求、评审、里�
 
 | 文档 | 内容 |
 |---|---|
+| [代码规范](docs/代码规范.md) | 包结构与分层、编排骨架、错误/缓存/CLI/测试/提交约定（人和 AI 写代码前必读；入口 [AGENTS.md](AGENTS.md)） |
 | [视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md](docs/视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md) | 需求、AC-1…AC-39、里程碑、风险、不做清单 |
 | [依赖组件与付费项-说明.md](docs/依赖组件与付费项-说明.md) | 组件/版本/许可/磁盘、模型下载、付费项与价表 |
 | [MVP-交付清单.md](docs/MVP-交付清单.md) | 交付物、验收步骤、质量基线、已知限制 |
