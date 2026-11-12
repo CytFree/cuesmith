@@ -92,7 +92,7 @@ python -m submatrix history --db D:\tmp\history.db    # 指定库
 
 ## 4. 真实验证（2026-11-03）
 
-环境：Windows + CPU；GUI 用仓库自带 `spike/gui/.venv`（gradio 6.30.0），`http://127.0.0.1:7865` 真实 HTTP，脚本 [tools/gui_history_real.py](tools/gui_history_real.py)。
+环境：Windows + CPU；GUI 用仓库自带 `spike/gui/.venv`（gradio 6.30.0），`http://127.0.0.1:7865` 真实 HTTP，脚本 [tools/gui_history_real.py](../tools/gui_history_real.py)。
 
 | 步骤 | 结果 |
 |---|---|

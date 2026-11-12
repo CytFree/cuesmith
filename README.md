@@ -74,7 +74,7 @@ work/run1/
 | 系统 | Windows 10/11 x64 | Windows 11 |
 | Python | 3.11（3.10 也能跑部分 worker，但不保证） | 3.11.6 |
 | ffmpeg | 在 `PATH`，带 libx264/aac | ffmpeg 9.0.2-full_build |
-| 磁盘 | ≥ 4 GB（ASR 环境 + small 模型）/ ≈ 6 GB（含 medium）；本机全量（含 demucs/GUI）≈ 7.5 GB | 见[依赖说明](依赖组件与付费项-说明.md) |
+| 磁盘 | ≥ 4 GB（ASR 环境 + small 模型）/ ≈ 6 GB（含 medium）；本机全量（含 demucs/GUI）≈ 7.5 GB | 见[依赖说明](docs/依赖组件与付费项-说明.md) |
 | GPU | 不需要（全部 CPU） | AMD 780M 核显，无 CUDA |
 
 ### 3.2 主包（零运行时依赖）
@@ -101,7 +101,7 @@ python -m pip install -e ".[gui]"
 | GUI | gradio | 可选 | `spike/gui/.venv` |
 
 本机已有环境，无需重装。新机器命令（版本必须按此 pin，踩过的坑见
-[依赖组件与付费项-说明.md](依赖组件与付费项-说明.md#4-版本-pin-为什么不能随便升级)）：
+[依赖组件与付费项-说明.md](docs/依赖组件与付费项-说明.md#4-版本-pin-为什么不能随便升级)）：
 
 ```powershell
 # TTS：edge-tts（免费）
@@ -124,16 +124,16 @@ spike/asr/.venv/Scripts/python.exe -m pip install "faster-whisper==1.2.1" "ctran
 ```
 
 BGM 保留（demucs + torch CPU）的安装命令见
-[M6 实现说明 §6](M6-BGM保留-人声分离-实现说明.md)。
+[M6 实现说明 §6](docs/M6-BGM保留-人声分离-实现说明.md)。
 
 ### 3.4 模型
 
 | 模型 | 大小 | 是否必需 | 自己下载 |
 |---|---|---|---|
 | faster-whisper small | 464 MB | ASR 英文默认 | 首次自动下载（HF 被墙时走 hf-mirror） |
-| faster-whisper medium | 1.46 GB | 中文/日韩默认 | 手动放 `spike/whisper-models/faster-whisper-medium`，见 [M7 文档](M7-zh-en-双向链路-真实素材验证-实现说明.md) |
-| 说话人分离 3 个 ONNX | ≈ 84 MB | 多人声 | `spike/diarization/models/`，命令见 [M11 文档](M11-多人声-说话人分离与多音色配音-实现说明.md) |
-| silero VAD | 643 KB | 否（VAD 预过滤用，缺了自动跳过） | `spike/diarization/models/vad/silero_vad.onnx`，命令见 [OPT-6/7 说明](OPT6-OPT7-VAD与声纹二次聚类-实现说明.md) |
+| faster-whisper medium | 1.46 GB | 中文/日韩默认 | 手动放 `spike/whisper-models/faster-whisper-medium`，见 [M7 文档](docs/M7-zh-en-双向链路-真实素材验证-实现说明.md) |
+| 说话人分离 3 个 ONNX | ≈ 84 MB | 多人声 | `spike/diarization/models/`，命令见 [M11 文档](docs/M11-多人声-说话人分离与多音色配音-实现说明.md) |
+| silero VAD | 643 KB | 否（VAD 预过滤用，缺了自动跳过） | `spike/diarization/models/vad/silero_vad.onnx`，命令见 [OPT-6/7 说明](docs/OPT6-OPT7-VAD与声纹二次聚类-实现说明.md) |
 | demucs 权重 | 80 MB | 保留 BGM | 首次运行自动下到 `spike/demucs/.torch` |
 
 ### 3.5 装完自检
@@ -256,7 +256,7 @@ python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://12
 |---|---|
 | `找不到装有 edge-tts 的 Python` | 用 `--tts-python spike\.venv311\Scripts\python.exe`，或设 `SUBMATRIX_TTS_PYTHON` |
 | `找不到装有 faster-whisper 的 Python` | `--asr-python` 指向装了 faster-whisper 的解释器 |
-| `没找到说话人分割模型` | 按 [M11 §3](M11-多人声-说话人分离与多音色配音-实现说明.md) 下载到 `spike/diarization/models` |
+| `没找到说话人分割模型` | 按 [M11 §3](docs/M11-多人声-说话人分离与多音色配音-实现说明.md) 下载到 `spike/diarization/models` |
 | 内封字幕 + `src-lang auto` 失败 | 显式 `--src-lang zh`（字幕流无法判断语言），GUI 源语言同样要选 |
 | 翻译报 `LLM 返回不是 JSON 数组` 或输出 `Mi mi mi…` | 音乐/噪声字幕；M15 会自动过滤并回退免费 MT，重跑即可；仍失败看 `warnings` |
 | 免费 MT 报 `SSL: UNEXPECTED_EOF...` | 网络抖动；重试，或改用 `--llm`（DeepSeek） |
@@ -273,7 +273,7 @@ python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://12
 **默认完全免费**：本地 ASR/分离/BGM + Edge-TTS + 微软免费翻译，只花 CPU 时间。
 只有两项可选付费：**DeepSeek LLM 翻译**（实测 ¥0.006–0.017/条）和**阿里云百炼声音复刻**
 （$0.0039/274 字符）。价表、计费口径、如何完全关掉付费项，见
-[依赖组件与付费项-说明.md](依赖组件与付费项-说明.md)。
+[依赖组件与付费项-说明.md](docs/依赖组件与付费项-说明.md)。
 
 ---
 
@@ -294,35 +294,37 @@ spike/                worker 环境与模型（不进仓库分发）
   whisper-models/     faster-whisper-medium
 work/history.db       GUI 任务历史（sqlite，本地；可用 history 子命令查/删）
 tools/                回归、冒烟、云 TTS/复刻、GUI 历史 e2e、本地 TTS 基准
-tests/                751 个单测
-M0–M22-*.md           各里程碑实现说明（含踩坑与实测数据）
+tests/                单测（`python -m pytest`；真实素材用例按需开启，见 3.5）
+docs/                 除本 README 外的全部文档：需求、评审、里程碑实现说明与实测记录
 ```
 
 ---
 
 ## 9. 文档索引
 
+除本 README 外，所有文档都在 `docs/` 下（`git mv` 搬的，历史可追）。
+
 | 文档 | 内容 |
 |---|---|
-| [视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md](视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md) | 需求、AC-1…AC-39、里程碑、风险、不做清单 |
-| [依赖组件与付费项-说明.md](依赖组件与付费项-说明.md) | 组件/版本/许可/磁盘、模型下载、付费项与价表 |
-| [MVP-交付清单.md](MVP-交付清单.md) | 交付物、验收步骤、质量基线、已知限制 |
-| [OPT-1/OPT-2 优化说明](OPT1-OPT2-识别人数与配音溢出-优化说明.md) | 英文自动人数（短簇合并+语言阈值）、配音溢出（提语速+atempo） |
-| [OPT-3/4/5 优化说明](OPT3-OPT4-OPT5-渠道回退与并发-实现说明.md) | 翻译渠道回退、音色下线降级、翻译/TTS 并发、二次补跑、ASR 与 diarize 并行 |
-| [OPT-6/OPT-7 优化说明](OPT6-OPT7-VAD与声纹二次聚类-实现说明.md) | VAD 预过滤（拼接语音再聚类）、声纹 embedding 二次聚类（自动判人数） |
-| [OPT-8 优化说明](OPT8-GUI任务历史-实现说明.md) | GUI 任务历史（sqlite 持久化、载入参数、重跑、history CLI） |
-| [OPT-9 评估](OPT9-更大声纹模型评估-2026-11-03.md) | 更大英文声纹模型值不值得换（实测 + GPU 提速估算；结论：暂不默认接入） |
-| [OPT-10 优化说明](OPT10-翻译提速-HTTP连接复用-实现说明.md) | 翻译提速：HTTP 连接复用，10min 字幕 15.3s→5.7s（并发 8 时 3.4s） |
-| [OPT-11 实现说明](OPT11-本地TTS兜底-实现说明.md) | 本地 TTS 接入（Kokoro/MeloTTS）+ 联网失败自动兜底；默认仍 Edge |
-| [本地 TTS 评估](本地TTS模型对比评估-2026-11-03.md) | Piper / Kokoro-82M / MeloTTS 实测（速度、CER/WER、多音色、集成方式；待决策） |
-| [GPU 显存与提速估算](GPU显存与提速估算-2026-11-03.md) | 上 GPU 各阶段显存估算、整链峰值与显卡档位建议（6–8GB 够用 / 12GB 舒适） |
-| [M13 实现说明](M13-开源GUI与成本汇总-实现说明.md) | GUI 薄壳与成本汇总 |
-| [M14 实现说明](M14-GUI-批量取消与预览-实现说明.md) | 批量/停止/预览、配音解释器自动探测 |
-| [M15 实现说明](M15-音乐噪声字幕过滤-实现说明.md) | 音乐/噪声字幕过滤与翻译兜底 |
-| [M16 实现说明](M16-GUI音色选择与试听-实现说明.md) | 音色目录/试听、多人声色重配、真实 GUI 测试 |
-| [真实素材验证记录](真实素材验证-3人-长视频-批量-2026-11-02.md) | 中文 3 人 / 英文 10min+ / GUI 批量+多人声结果与两个 bug 修复 |
-| [待办 · 优化项](待办-优化项.md) | 真实素材限制的优化方案（P0–P3、改动范围、验收标准） |
-| M1–M12 | 分阶段实现细节与实测数据（见根目录 `M*.md`） |
+| [视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md](docs/视频字幕提取翻译配音工具-需求文档-v1.1-MVP.md) | 需求、AC-1…AC-39、里程碑、风险、不做清单 |
+| [依赖组件与付费项-说明.md](docs/依赖组件与付费项-说明.md) | 组件/版本/许可/磁盘、模型下载、付费项与价表 |
+| [MVP-交付清单.md](docs/MVP-交付清单.md) | 交付物、验收步骤、质量基线、已知限制 |
+| [OPT-1/OPT-2 优化说明](docs/OPT1-OPT2-识别人数与配音溢出-优化说明.md) | 英文自动人数（短簇合并+语言阈值）、配音溢出（提语速+atempo） |
+| [OPT-3/4/5 优化说明](docs/OPT3-OPT4-OPT5-渠道回退与并发-实现说明.md) | 翻译渠道回退、音色下线降级、翻译/TTS 并发、二次补跑、ASR 与 diarize 并行 |
+| [OPT-6/OPT-7 优化说明](docs/OPT6-OPT7-VAD与声纹二次聚类-实现说明.md) | VAD 预过滤（拼接语音再聚类）、声纹 embedding 二次聚类（自动判人数） |
+| [OPT-8 优化说明](docs/OPT8-GUI任务历史-实现说明.md) | GUI 任务历史（sqlite 持久化、载入参数、重跑、history CLI） |
+| [OPT-9 评估](docs/OPT9-更大声纹模型评估-2026-11-03.md) | 更大英文声纹模型值不值得换（实测 + GPU 提速估算；结论：暂不默认接入） |
+| [OPT-10 优化说明](docs/OPT10-翻译提速-HTTP连接复用-实现说明.md) | 翻译提速：HTTP 连接复用，10min 字幕 15.3s→5.7s（并发 8 时 3.4s） |
+| [OPT-11 实现说明](docs/OPT11-本地TTS兜底-实现说明.md) | 本地 TTS 接入（Kokoro/MeloTTS）+ 联网失败自动兜底；默认仍 Edge |
+| [本地 TTS 评估](docs/本地TTS模型对比评估-2026-11-03.md) | Piper / Kokoro-82M / MeloTTS 实测（速度、CER/WER、多音色、集成方式；待决策） |
+| [GPU 显存与提速估算](docs/GPU显存与提速估算-2026-11-03.md) | 上 GPU 各阶段显存估算、整链峰值与显卡档位建议（6–8GB 够用 / 12GB 舒适） |
+| [M13 实现说明](docs/M13-开源GUI与成本汇总-实现说明.md) | GUI 薄壳与成本汇总 |
+| [M14 实现说明](docs/M14-GUI-批量取消与预览-实现说明.md) | 批量/停止/预览、配音解释器自动探测 |
+| [M15 实现说明](docs/M15-音乐噪声字幕过滤-实现说明.md) | 音乐/噪声字幕过滤与翻译兜底 |
+| [M16 实现说明](docs/M16-GUI音色选择与试听-实现说明.md) | 音色目录/试听、多人声色重配、真实 GUI 测试 |
+| [真实素材验证记录](docs/真实素材验证-3人-长视频-批量-2026-11-02.md) | 中文 3 人 / 英文 10min+ / GUI 批量+多人声结果与两个 bug 修复 |
+| [待办 · 优化项](docs/待办-优化项.md) | 真实素材限制的优化方案（P0–P3、改动范围、验收标准） |
+| M1–M12 | 分阶段实现细节与实测数据（见 `docs/M*.md`） |
 
 ---
 
