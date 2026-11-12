@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import NoReturn, Sequence
 
 from .asr import AsrError, AsrOptions, AsrResult, run_asr
 from .burn import PRESETS, BurnError, BurnOptions, BurnResult, run_burn
@@ -86,7 +86,7 @@ class UsageError(Exception):
 
 
 class _Parser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:  # type: ignore[override]
+    def error(self, message: str) -> NoReturn:
         raise UsageError(message)
 
 

@@ -42,7 +42,7 @@ from .interpreters import (
     resolve,
     runner_probe,
 )
-from .report import OutputFile, file_digest
+from .report import OutputFile, file_digest, section
 from .srt import load_srt
 from .worker_protocol import run_once, subprocess_runner
 
@@ -1242,22 +1242,23 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
     )
     # 分段单独落一份（OPT-5）：ASR 在跑的时候可以先算分段，之后只补字幕归属；
     # 也方便下次换字幕/重跑 ASR 时复用分段（分段只跟音频和聚类参数有关）。
+    summary_block = section(report, "summary")
     write_segments(
         out_dir / SEGMENTS_NAME,
         turns=turns,
         source_path=source,
         duration_s=duration_ms / 1000,
-        config=report["config"],  # type: ignore[arg-type]
+        config=section(report, "config"),
         summary={
-            "speakers": report["summary"]["speakers"],  # type: ignore[index]
-            "speakers_raw": report["summary"]["speakers_raw"],  # type: ignore[index]
-            "merged_clusters": report["summary"]["merged_clusters"],  # type: ignore[index]
-            "vad": report["summary"]["vad"],  # type: ignore[index]
-            "clustering": report["summary"]["clustering"],  # type: ignore[index]
-            "turns": report["summary"]["turns"],  # type: ignore[index]
-            "speech_s": report["summary"]["speech_s"],  # type: ignore[index]
-            "rtf": report["summary"]["rtf"],  # type: ignore[index]
-            "wall_s": report["summary"]["wall_s"],  # type: ignore[index]
+            "speakers": summary_block.get("speakers"),
+            "speakers_raw": summary_block.get("speakers_raw"),
+            "merged_clusters": summary_block.get("merged_clusters"),
+            "vad": summary_block.get("vad"),
+            "clustering": summary_block.get("clustering"),
+            "turns": summary_block.get("turns"),
+            "speech_s": summary_block.get("speech_s"),
+            "rtf": summary_block.get("rtf"),
+            "wall_s": summary_block.get("wall_s"),
         },
         warnings=warnings,
     )

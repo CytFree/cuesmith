@@ -38,6 +38,7 @@ import hashlib
 import json
 import threading
 import time
+from collections.abc import Sized
 from dataclasses import dataclass, field
 from datetime import datetime
 import math
@@ -75,7 +76,7 @@ from .tts import speech_capacity_cps
 from .matrix import MatrixOptions, run_matrix
 from .merge import MergeError, MergeOptions, run_merge
 from .probe import ProbeError, ProbeOptions, run_probe
-from .report import file_digest
+from .report import file_digest, section
 from .srt import load_srt
 from .translate import (
     LlmConfig,
@@ -300,8 +301,7 @@ def _asr_model_matches(report: dict[str, object], options: PipelineOptions) -> b
     # 没显式指定：默认模型按源语言挑（auto 时用旧报告识别出的语言反推"当时该用哪个"）
     language = options.src_lang
     if language == "auto":
-        summary = report.get("summary") or {}
-        language = str(summary.get("language") or "") if isinstance(summary, dict) else ""
+        language = str(section(report, "summary").get("language") or "")
     if not language:
         return True
     expected = model_variant(preferred_model(language) or "small")
@@ -436,24 +436,22 @@ def _translate_config_matches(
 
 
 def _translation_summary(report: dict[str, object]) -> dict[str, object]:
-    summary = report.get("summary") or {}
-    cps = summary.get("cps") or {}  # type: ignore[union-attr]
-    condense = summary.get("condense") or {}
-    llm = (report.get("config") or {}).get("llm") or {}  # type: ignore[union-attr]
-    config = report.get("config") or {}
+    summary = section(report, "summary")
+    cps = section(summary, "cps")
+    condense = section(summary, "condense")
+    llm = section(section(report, "config"), "llm")
+    config = section(report, "config")
     return {
         "cues": summary.get("cues"),
         "paragraphs": summary.get("paragraphs"),
         "fallback_cues": summary.get("fallback_cues"),
-        "provider": config.get("provider") if isinstance(config, dict) else None,
+        "provider": config.get("provider"),
         "provider_fallback": summary.get("provider_fallback"),
-        "cps": cps.get("mean") if isinstance(cps, dict) else None,
-        "cps_over_limit": cps.get("over_limit") if isinstance(cps, dict) else None,
-        "condense_triggered": condense.get("triggered") if isinstance(condense, dict) else None,
-        "review_changes": (summary.get("review") or {}).get("cues_changed")
-        if isinstance(summary.get("review"), dict)
-        else None,
-        "tokens": (llm.get("usage") or {}).get("total_tokens") if isinstance(llm, dict) else None,
+        "cps": cps.get("mean"),
+        "cps_over_limit": cps.get("over_limit"),
+        "condense_triggered": condense.get("triggered"),
+        "review_changes": section(summary, "review").get("cues_changed"),
+        "tokens": section(llm, "usage").get("total_tokens"),
     }
 
 
@@ -832,7 +830,7 @@ def _merge_cache_hit(
         return _report_sha_matches(
             report, run.out_dir / "diarize" / "speakers.json", "input", "speakers", "sha256"
         )
-    return not (report.get("input") or {}).get("speakers")
+    return not section(report, "input").get("speakers")
 
 
 def _translate_cache_hit(
@@ -1041,13 +1039,13 @@ def _stage_asr(run: _Run, track: _Track) -> bool:
     try:
         report = _read_json(asr_dir / "asr.json")
         if _asr_cache_hit(run, report, hotwords=asr_hotwords):
-            summary = report.get("summary") or {}
-            detected = str(summary.get("language") or "")  # type: ignore[union-attr]
+            summary = section(report, "summary")
+            detected = str(summary.get("language") or "")
             if options.src_lang == "auto":
                 track.src_lang = _map_language(detected)
             track.subtitle_path = asr_dir / "source.srt"
             # 报告里的 cue 数是 ASR 当时的；字幕被人工校对（并过）之后以文件为准
-            current_cues = summary.get("cues")  # type: ignore[union-attr]
+            current_cues = summary.get("cues")
             try:
                 current_cues = len(load_srt(track.subtitle_path)[0])
             except (OSError, ValueError):
@@ -1077,9 +1075,9 @@ def _stage_asr(run: _Run, track: _Track) -> bool:
                 )
             )
             track.subtitle_path = asr.srt_path
-            summary = asr.report.get("summary") or {}
-            config = asr.report.get("config") or {}
-            detected = str(summary.get("language") or "")  # type: ignore[union-attr]
+            summary = section(asr.report, "summary")
+            config = section(asr.report, "config")
+            detected = str(summary.get("language") or "")
             if options.src_lang == "auto":
                 track.src_lang = _map_language(detected)
             run.carry_warnings(asr.report)
@@ -1092,10 +1090,10 @@ def _stage_asr(run: _Run, track: _Track) -> bool:
                 ],
                 summary={
                     "language": detected,
-                    "cues": summary.get("cues"),  # type: ignore[union-attr]
-                    "words": summary.get("words"),  # type: ignore[union-attr]
-                    "model": config.get("model_variant"),  # type: ignore[union-attr]
-                    "rtf": summary.get("rtf"),  # type: ignore[union-attr]
+                    "cues": summary.get("cues"),
+                    "words": summary.get("words"),
+                    "model": config.get("model_variant"),
+                    "rtf": summary.get("rtf"),
                 },
             )
         if track.subtitle_path is None or not Path(track.subtitle_path).is_file():
@@ -1664,9 +1662,9 @@ def _stage_mark(run: _Run, track: _Track) -> bool:
         else:
             mark = run_mark(MarkOptions(src=mark_src, out=final_dir))
             marked_video = mark.video_path or marked_video
-            verification = mark.report.get("verification") or {}
-            explicit = (verification.get("explicit_label") or {}).get("ok")  # type: ignore[union-attr]
-            implicit = (verification.get("metadata_roundtrip") or {}).get("ok")  # type: ignore[union-attr]
+            verification = section(mark.report, "verification")
+            explicit = section(verification, "explicit_label").get("ok")
+            implicit = section(verification, "metadata_roundtrip").get("ok")
             run.record(
                 "mark",
                 "ok" if mark.exit_code == 0 else "partial",
@@ -1770,7 +1768,7 @@ def _segments_matches(
 
     if not payload:
         return False
-    recorded = (payload.get("source") or {}).get("sha256")  # type: ignore[union-attr]
+    recorded = section(payload, "source").get("sha256")
     if not recorded or str(recorded) != _sha256(source):
         return False
     config = payload.get("config")
@@ -1782,15 +1780,17 @@ def _segments_matches(
 def _segments_base_report(payload: dict[str, object]) -> dict[str, object]:
     """把 ``segments.json`` 还原成一份"还没有字幕归属"的 diarize 报告底座。"""
 
-    source_block = payload.get("source") or {}
+    source_block = section(payload, "source")
     base: dict[str, object] = {
+        # 这两段原样带过去：它们本来就没有读取方（只在下游被 section() 读取），
+        # 保持"坏值照拷"比在这里悄悄改写成 {} 更好追。
         "config": payload.get("config") or {},
         "summary": payload.get("summary") or {},
         "warnings": payload.get("warnings") or [],
         "input": {
-            "path": (source_block or {}).get("path"),  # type: ignore[union-attr]
-            "bytes": (source_block or {}).get("bytes"),  # type: ignore[union-attr]
-            "sha256": (source_block or {}).get("sha256"),  # type: ignore[union-attr]
+            "path": source_block.get("path"),
+            "bytes": source_block.get("bytes"),
+            "sha256": source_block.get("sha256"),
             "duration_s": payload.get("duration_s"),
         },
     }
@@ -1871,8 +1871,7 @@ def _effective_diarize_threshold(
     for entry in stages:
         if entry.get("stage") != "diarize":
             continue
-        summary = entry.get("summary")
-        value = summary.get("threshold") if isinstance(summary, dict) else None
+        value = section(entry, "summary").get("threshold")
         if isinstance(value, (int, float)):
             return float(value)
         break
@@ -2015,7 +2014,7 @@ def _remap_speaker_assignments(
 def _speakers_cache_matches(report: dict[str, object], speakers_path: Path | None) -> bool:
     """配音缓存判据：说话人归属文件变了（重跑了分离）就必须重配。"""
 
-    recorded = (report.get("input") or {}).get("speakers")
+    recorded = section(report, "input").get("speakers")
     if speakers_path is None:
         return recorded is None
     if not isinstance(recorded, dict):
@@ -2085,10 +2084,7 @@ def _dub_tts_cache_matches(
         return False
     if str(config.get("tts_fallback") or "local") != tts_fallback:
         return False
-    local_config = config.get("local_tts")
-    recorded_fingerprint = (
-        local_config.get("fingerprint") if isinstance(local_config, dict) else None
-    )
+    recorded_fingerprint = section(config, "local_tts").get("fingerprint")
     if (
         recorded_fingerprint is not None
         and local_fingerprint is not None
@@ -2102,14 +2098,15 @@ def _dub_tts_cache_matches(
 
 
 def _diarize_summary(report: dict[str, object]) -> dict[str, object]:
-    summary = report.get("summary") or {}
+    summary = section(report, "summary")
     stats = summary.get("speaker_stats") or []
-    config = report.get("config") or {}
+    merged = summary.get("merged_clusters")
+    config = section(report, "config")
     return {
         "speakers": summary.get("speakers"),
         "speakers_raw": summary.get("speakers_raw"),
-        "merged_clusters": len(summary.get("merged_clusters") or []),  # type: ignore[arg-type]
-        "threshold": config.get("threshold") if isinstance(config, dict) else None,
+        "merged_clusters": len(merged) if isinstance(merged, Sized) else 0,
+        "threshold": config.get("threshold"),
         "vad": summary.get("vad"),
         "clustering": summary.get("clustering"),
         "turns": summary.get("turns"),
@@ -2129,57 +2126,55 @@ def _diarize_summary(report: dict[str, object]) -> dict[str, object]:
 
 
 def _merge_summary(report: dict[str, object]) -> dict[str, object]:
-    summary = report.get("summary") or {}
+    summary = section(report, "summary")
     return {
-        "before": summary.get("before"),  # type: ignore[union-attr]
-        "after": summary.get("after"),  # type: ignore[union-attr]
-        "merged_away": summary.get("merged_away"),  # type: ignore[union-attr]
-        "speakers": summary.get("speakers"),  # type: ignore[union-attr]
+        "before": summary.get("before"),
+        "after": summary.get("after"),
+        "merged_away": summary.get("merged_away"),
+        "speakers": summary.get("speakers"),
     }
 
 
 def _burn_summary(report: dict[str, object]) -> dict[str, object]:
-    verification = report.get("verification") or {}
-    output = report.get("output") or {}
-    config = report.get("config") or {}
-    subtitle = (report.get("input") or {}).get("subtitle") or {}  # type: ignore[union-attr]
+    verification = section(report, "verification")
+    output = section(report, "output")
+    config = section(report, "config")
+    subtitle = section(section(report, "input"), "subtitle")
     return {
-        "cues": subtitle.get("cues") if isinstance(subtitle, dict) else None,
-        "position": config.get("position") if isinstance(config, dict) else None,
-        "verified": verification.get("ok") if isinstance(verification, dict) else None,
-        "pixel_diff": verification.get("region_pixel_diff")
-        if isinstance(verification, dict)
-        else None,
-        "duration_delta_ms": output.get("duration_delta_ms") if isinstance(output, dict) else None,
+        "cues": subtitle.get("cues"),
+        "position": config.get("position"),
+        "verified": verification.get("ok"),
+        "pixel_diff": verification.get("region_pixel_diff"),
+        "duration_delta_ms": output.get("duration_delta_ms"),
     }
 
 
 def _matrix_summary(report: dict[str, object]) -> dict[str, object]:
-    layout = report.get("layout") or {}
-    summary = report.get("summary") or {}
+    layout = section(report, "layout")
+    summary = section(report, "summary")
     return {
-        "cues": summary.get("cues"),  # type: ignore[union-attr]
-        "warnings": summary.get("warnings"),  # type: ignore[union-attr]
-        "cues_before": layout.get("cues_before") if isinstance(layout, dict) else None,
-        "cues_after": layout.get("cues_after") if isinstance(layout, dict) else None,
-        "layout_enabled": layout.get("enabled") if isinstance(layout, dict) else None,
+        "cues": summary.get("cues"),
+        "warnings": summary.get("warnings"),
+        "cues_before": layout.get("cues_before"),
+        "cues_after": layout.get("cues_after"),
+        "layout_enabled": layout.get("enabled"),
     }
 
 
 def _dub_summary(report: dict[str, object]) -> dict[str, object]:
-    summary = report.get("summary") or {}
-    bgm = summary.get("bgm") or {}  # type: ignore[union-attr]
+    summary = section(report, "summary")
+    bgm = section(summary, "bgm")
     return {
-        "cues": summary.get("cues"),  # type: ignore[union-attr]
-        "synthesized": summary.get("synthesized"),  # type: ignore[union-attr]
-        "failed": summary.get("failed"),  # type: ignore[union-attr]
-        "manual": summary.get("manual"),  # type: ignore[union-attr]
-        "atempo": summary.get("atempo"),  # type: ignore[union-attr]
-        "absorbed": summary.get("absorbed"),  # type: ignore[union-attr]
-        "rate_escalated": summary.get("rate_escalated"),  # type: ignore[union-attr]
-        "played_overflow_over_10pct": summary.get("played_overflow_over_10pct"),  # type: ignore[union-attr]
-        "bgm_mode": bgm.get("mode") if isinstance(bgm, dict) else None,
-        "bgm_separator": bgm.get("separator") if isinstance(bgm, dict) else None,
+        "cues": summary.get("cues"),
+        "synthesized": summary.get("synthesized"),
+        "failed": summary.get("failed"),
+        "manual": summary.get("manual"),
+        "atempo": summary.get("atempo"),
+        "absorbed": summary.get("absorbed"),
+        "rate_escalated": summary.get("rate_escalated"),
+        "played_overflow_over_10pct": summary.get("played_overflow_over_10pct"),
+        "bgm_mode": bgm.get("mode"),
+        "bgm_separator": bgm.get("separator"),
         "speakers": summary.get("speakers"),
         "tts_fallback": summary.get("tts_fallback"),
         "local_tts": summary.get("local_tts"),

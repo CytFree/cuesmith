@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import ast
-import re
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -122,7 +122,11 @@ LENGTH_OVERRIDES = {
 MAX_LINES = 150
 
 # 规范 §3：报告 JSON 的 union-attr 欠债。治一处就下调一处，不许只增长。
-TYPE_IGNORE_BUDGET = 57
+# 基线从 57 降到 12：``report.section()`` 把"取报告里的一段"收成一处之后，pipeline /
+# diarize 的 41 处按行抑制全部删掉（含 31 处同一根因的 union-attr）。
+# 剩下 12 处是别的原因（动态 JSON 的 int()/float() 收窄、gui 表单装箱、cost 深合并），
+# 各有自己的修法，别混进同一次改动里。
+TYPE_IGNORE_BUDGET = 12
 
 
 # ---------------------------------------------------------------- 工具
@@ -321,10 +325,20 @@ def test_long_functions_are_declared() -> None:
 
 
 def test_type_ignore_budget_does_not_grow() -> None:
-    total = sum(len(re.findall(r"#\s*type:\s*ignore", source(name))) for name in MODULES)
+    # 只数**注释 token**：文档字符串里写到这串字（比如本仓库的规范说明）不算压制告警
+    found: dict[str, int] = {}
+    for name in sorted(MODULES):
+        count = 0
+        with MODULES[name].open("rb") as handle:
+            for token in tokenize.tokenize(handle.readline):
+                if token.type == tokenize.COMMENT and "type: ignore" in token.string:
+                    count += 1
+        if count:
+            found[name] = count
+    total = sum(found.values())
     assert total <= TYPE_IGNORE_BUDGET, (
-        f"# type: ignore 增加到了 {total} 处（基线 {TYPE_IGNORE_BUDGET}）。"
-        "规范 §3：报告 JSON 边界应当用 TypedDict/小类型收窄，不要靠压制告警过关。"
+        f"# type: ignore 增加到了 {total} 处（基线 {TYPE_IGNORE_BUDGET}）：{found}\n"
+        "规范 §3：报告 JSON 边界应当用 report.section()/TypedDict 收窄，不要靠压制告警过关。"
     )
 
 

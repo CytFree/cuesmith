@@ -11,6 +11,7 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Mapping
 
 from . import __version__
 from .srt import Subtitle
@@ -23,9 +24,27 @@ __all__ = [
     "build_report",
     "describe_input",
     "file_digest",
+    "section",
 ]
 
 SCHEMA_VERSION = 1
+
+
+def section(report: Mapping[str, object], key: str) -> dict[str, object]:
+    """取报告里的一段（不是 dict 就给空 dict）。
+
+    报告是 JSON，边界处的类型只有 ``dict[str, object]``；于是每个读点要么写
+    ``(report.get("x") or {}).get("y")`` 再按行挂一条抑制，要么散着写
+    ``x.get(k) if isinstance(x, dict) else None``。取段收成一处，两种写法都不再需要。
+
+    对损坏的报告（该是 dict 却是别的）：原先是"假值 → 空 dict、真值 → AttributeError"，
+    现在统一返回空 dict —— 与那些 ``isinstance`` 守卫本来的意图一致，读出来就是 None。
+    参数用 ``Mapping`` 是为了让调用方不必把自己手里的 dict 复制一份。
+    """
+
+    value = report.get(key)
+    return value if isinstance(value, dict) else {}
+
 
 
 @dataclass(frozen=True, slots=True)

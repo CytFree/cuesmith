@@ -35,11 +35,12 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
 
 __all__ = [
     "STDERR_TAIL_CHARS",
     "TRACEBACK_CHARS",
+    "TextStream",
     "describe_error",
     "emit_progress",
     "error_payload",
@@ -79,11 +80,23 @@ def error_payload(exc: BaseException, **extra: object) -> dict[str, object]:
     }
 
 
-def write_line(stream: object, payload: Mapping[str, object]) -> None:
+class TextStream(Protocol):
+    """协议通道只要"能写一行文本并 flush"：``sys.stdout`` / ``StringIO`` / 管道都满足。
+
+    以前这里标的是 ``object``，于是 ``stream.write`` 每行都得压一条告警；标成协议之后，
+    调用方传什么由类型本身说明白，也不影响运行时。
+    """
+
+    def write(self, data: str) -> object: ...
+
+    def flush(self) -> object: ...
+
+
+def write_line(stream: TextStream, payload: Mapping[str, object]) -> None:
     """把 payload 作为一行 JSON 写到给定流并 flush（常驻 worker 的协议通道）。"""
 
-    stream.write(json.dumps(dict(payload), ensure_ascii=False) + "\n")  # type: ignore[attr-defined]
-    stream.flush()  # type: ignore[attr-defined]
+    stream.write(json.dumps(dict(payload), ensure_ascii=False) + "\n")
+    stream.flush()
 
 
 def write_payload(
