@@ -24,8 +24,8 @@
    `_CLI_ONLY_ARGS` / `_EXPANDED_ARGS`）→ 缓存键 → 报告 `config` → GUI/README。
    缓存键漏掉新参数就是 bug，除非按规范 §10.4 登记"有意不进键"。
 7. **库模块不许 `print` 到 stdout**（`cli.py` 除外）。
-8. **不靠压制告警过关**：禁止新增 `# type: ignore`（基线见规范 §10），报告 JSON 边界
-   用 TypedDict/小类型收窄。
+8. **不靠压制告警过关**：**禁止 `# type: ignore`**（基线已是 0 处，写一处测试就红），
+   报告 JSON 边界用 `report.section()` / `cast` / `isinstance` 收窄。
 9. **测试不联网、不依赖本机状态**：外部引擎注入假对象；真实素材用例用环境变量开关并写
    `skip(reason=...)`。
 10. **证据要求**：修 bug 必须带一个先红后绿的用例；重构必须带等价性对照（规范 §7.6：
@@ -36,6 +36,12 @@
 ```powershell
 python -m pytest -q                     # 全量；含 tests/test_structure.py 的结构检查
 python -m pyflakes submatrix tests      # 必须 0 告警
+```
+
+改了较大一块逻辑时再加一条覆盖率（门槛 80%，当前 83%）：
+
+```powershell
+python -m pytest -q --cov=submatrix --cov-fail-under=80
 ```
 
 ## 提交信息

@@ -8,6 +8,8 @@ dependencies = []
 [project.optional-dependencies]
 # 本地 Web GUI（Gradio 薄壳）：不装也能用全部 CLI 功能
 gui = ["gradio>=6"]
+# 开发工具（不是运行时依赖）：提交前跑 pytest + pyflakes，覆盖率按需
+dev = ["pytest>=8", "pytest-cov>=7", "pyflakes>=3"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -22,3 +24,11 @@ testpaths = ["tests"]
 addopts = "-q"
 # slow：真实素材 / 耗时用例（tests/test_real_sample.py），默认跳过，需要显式环境变量开启
 markers = ["slow: 真实素材或耗时用例，默认不跑"]
+
+[tool.coverage.run]
+source = ["submatrix"]
+
+[tool.coverage.report]
+show_missing = true
+# 基线 83%（2026-11）：worker 模块跑在子进程里，行覆盖率天然偏低，不计入门槛口径之外的解读
+fail_under = 80
