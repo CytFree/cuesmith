@@ -1105,7 +1105,7 @@ def _stage_asr(run: _Run, track: _Track) -> bool:
 
 
 def _stage_diarize(run: _Run, track: _Track) -> bool:
-    """3. diarize —— 说话人分离（默认关闭；`--diarize` / `--speaker-voices` / `--speakers` 开启）。
+    """说话人分离 + 按说话人分派音色（M11）。
 
     默认关闭的原因是单人口播不需要多花这份时间，行为与 M10 完全一致；给了
     `--speaker-voices` / `--speakers` 也算开启（少敲一个开关）。
@@ -1129,140 +1129,209 @@ def _stage_diarize(run: _Run, track: _Track) -> bool:
     diarize_dir = run.out_dir / "diarize"
     stage_start = time.monotonic()
     try:
-        diarize_report_path = diarize_dir / "diarize.json"
-        diarize_report = _read_json(diarize_report_path)
-        prefetched_turns: list[SpeakerTurn] | None = None
-        prefetched_report: dict[str, object] | None = None
-        prefetch = track.diarize_prefetch
-        if isinstance(prefetch, _BackgroundJob):
-            outcome = prefetch.result()
-            # 不要求严格是 DiarizeResult：凡是带 segments/report 的结果都接（便于测试注入）
-            segments = getattr(outcome, "segments", None)
-            if segments is not None:
-                prefetched_turns = list(segments)
-                prefetched_report = dict(getattr(outcome, "report", {}) or {})
+        report = _read_json(diarize_dir / "diarize.json")
+        prefetched_turns, prefetched_report, prefetch = _diarize_prefetch(track)
+        if _diarize_from_cache(run, track, options, diarize_dir, report, prefetched_turns):
+            pass
         elif prefetch is not None:
-            prefetched_turns, prefetched_report = prefetch
-        if (
-            prefetched_turns is None
-            and run.cached(diarize_report_path, diarize_dir / "speakers.json")
-            and _report_sha_matches(diarize_report, track.working_srt, "input", "srt", "sha256")
-            and _report_sha_matches(diarize_report, run.source, "input", "sha256")
-            and _diarize_config_matches(diarize_report, options, track.src_lang)
-        ):
-            track.speakers_path = diarize_dir / "speakers.json"
-            run.record(
-                "diarize",
-                "cached",
-                artifacts=[diarize_report_path, track.speakers_path],
-                summary=_diarize_summary(diarize_report),
-            )
-            run.carry_warnings(diarize_report)
-        elif prefetch is not None:
-            # 分段已就绪（并行算完或从 segments.json 复用）→ 只补归属
-            if prefetched_turns is None:
-                raise DiarizeError("说话人分段没有产出结果")
-            speakers_file, attached_report = attach_speakers(
-                prefetched_turns,
-                track.working_srt,
+            _diarize_attach(
+                run,
+                track,
                 diarize_dir,
+                turns=prefetched_turns,
                 report=prefetched_report,
+                stage_start=stage_start,
+                extra={"parallel_with_asr": True},
             )
-            track.speakers_path = speakers_file
-            run.carry_warnings(attached_report)
-            run.record(
-                "diarize",
-                "ok" if attached_report.get("status") == "ok" else "partial",
-                wall=time.monotonic() - stage_start,
-                artifacts=[
-                    diarize_dir / "diarize.json",
-                    diarize_dir / SEGMENTS_NAME,
-                    speakers_file,
-                ],
-                summary={**_diarize_summary(attached_report), "parallel_with_asr": True},
-            )
-        else:
-            # OPT-5：分段已存在（源文件/聚类参数没变）→ 只补归属，不再跑分离模型
-            cached_turns, cached_payload = load_segments(diarize_dir / SEGMENTS_NAME)
-            if (
-                cached_turns
-                and not options.force
-                and _segments_matches(cached_payload, options, run.source, track.src_lang)
-            ):
-                speakers_file, attached_report = attach_speakers(
-                    cached_turns,
-                    track.working_srt,
-                    diarize_dir,
-                    report=_segments_base_report(cached_payload),
-                )
-                track.speakers_path = speakers_file
-                run.carry_warnings(attached_report)
-                run.record(
-                    "diarize",
-                    "ok" if attached_report.get("status") == "ok" else "partial",
-                    wall=time.monotonic() - stage_start,
-                    artifacts=[
-                        diarize_dir / "diarize.json",
-                        diarize_dir / SEGMENTS_NAME,
-                        speakers_file,
-                    ],
-                    summary={**_diarize_summary(attached_report), "reused_segments": True},
-                )
-            else:
-                diarization = run_diarize(
-                    _diarize_options(
-                        options,
-                        source=run.source,
-                        out_dir=diarize_dir,
-                        srt=track.working_srt,
-                        language=track.src_lang,
-                    )
-                )
-                track.speakers_path = diarization.speakers_path
-                run.carry_warnings(diarization.report)
-                run.record(
-                    "diarize",
-                    "ok" if diarization.status == "ok" else "partial",
-                    wall=time.monotonic() - stage_start,
-                    artifacts=[diarization.report_path]
-                    + ([diarization.speakers_path] if diarization.speakers_path else []),
-                    summary=_diarize_summary(diarization.report),
-                )
-        if track.speakers_path is not None:
-            run.outputs["speakers_json"] = str(track.speakers_path.resolve())
-            assignments = _read_json(track.speakers_path)
-            speakers = [str(item) for item in assignments.get("speakers") or []]
-            explicit, pool = parse_speaker_voices(options.speaker_voices)
-            if not explicit and not pool:
-                pool = DEFAULT_SPEAKER_VOICES.get(options.tgt_lang, ())
-            default_voice = (
-                options.voice or DEFAULT_VOICES.get(options.tgt_lang) or "en-US-AriaNeural"
-            )
-            if len(speakers) >= 2:
-                track.speaker_voice_map = build_speaker_voice_map(
-                    speakers, explicit=explicit, pool=pool, default=default_voice
-                )
-                entry = run.entry("diarize")
-                if entry is not None:
-                    summary = entry.setdefault("summary", {})
-                    if isinstance(summary, dict):
-                        summary["speaker_voices"] = dict(sorted(track.speaker_voice_map.items()))
-                if not explicit and pool and len(speakers) > len(pool):
-                    run.note(
-                        f"检测到 {len(speakers)} 个说话人，但只配置了 {len(pool)} 个音色，"
-                        "多出来的说话人会复用前面的音色"
-                    )
-            else:
-                track.speakers_path = None
-                run.note("只识别到 1 个说话人，已退回单音色配音")
+        elif not _diarize_from_segments(run, track, options, diarize_dir, stage_start):
+            _diarize_fresh(run, track, options, diarize_dir, stage_start)
+        _map_speaker_voices(run, track, options)
     except (DiarizeError, OSError) as exc:
-        # 分离失败 → 诚实告警 + 退回单音色，不让整条链路白跑（成片仍然可用）
-        run.status = "partial"
-        run.record("diarize", "failed", error=str(exc))
-        run.note(f"说话人分离失败，已退回单音色配音：{exc}")
-        track.speakers_path = None
-        track.speaker_voice_map = {}
+        _diarize_fallback(run, track, exc)
     return True
+
+
+def _diarize_prefetch(
+    track: _Track,
+) -> tuple[list[SpeakerTurn] | None, dict[str, object] | None, object]:
+    """OPT-5：取 ASR 期间后台算好的分段（可能还在跑，也可能是现成元组）。"""
+
+    prefetched_turns: list[SpeakerTurn] | None = None
+    prefetched_report: dict[str, object] | None = None
+    prefetch = track.diarize_prefetch
+    if isinstance(prefetch, _BackgroundJob):
+        outcome = prefetch.result()
+        # 不要求严格是 DiarizeResult：凡是带 segments/report 的结果都接（便于测试注入）
+        segments = getattr(outcome, "segments", None)
+        if segments is not None:
+            prefetched_turns = list(segments)
+            prefetched_report = dict(getattr(outcome, "report", {}) or {})
+    elif prefetch is not None:
+        prefetched_turns, prefetched_report = prefetch
+    return prefetched_turns, prefetched_report, prefetch
+
+
+def _diarize_from_cache(
+    run: _Run,
+    track: _Track,
+    options: PipelineOptions,
+    diarize_dir: Path,
+    report: dict[str, object],
+    prefetched_turns: Sequence[SpeakerTurn] | None,
+) -> bool:
+    """四条判据全过才复用上一次的归属结果：产物齐、源片/字幕 sha 未变、配置未变。"""
+
+    report_path = diarize_dir / "diarize.json"
+    if prefetched_turns is not None:
+        return False
+    if not run.cached(report_path, diarize_dir / "speakers.json"):
+        return False
+    if not _report_sha_matches(report, track.working_srt, "input", "srt", "sha256"):
+        return False
+    if not _report_sha_matches(report, run.source, "input", "sha256"):
+        return False
+    if not _diarize_config_matches(report, options, track.src_lang):
+        return False
+    track.speakers_path = diarize_dir / "speakers.json"
+    run.record(
+        "diarize",
+        "cached",
+        artifacts=[report_path, track.speakers_path],
+        summary=_diarize_summary(report),
+    )
+    run.carry_warnings(report)
+    return True
+
+
+def _diarize_attach(
+    run: _Run,
+    track: _Track,
+    diarize_dir: Path,
+    *,
+    turns: Sequence[SpeakerTurn] | None,
+    report: dict[str, object] | None,
+    stage_start: float,
+    extra: dict[str, object],
+) -> None:
+    """分段已就绪（并行算完或从 segments.json 复用）→ 只补字幕归属，毫秒级。"""
+
+    if turns is None:
+        raise DiarizeError("说话人分段没有产出结果")
+    speakers_file, attached_report = attach_speakers(
+        turns, track.working_srt, diarize_dir, report=report
+    )
+    track.speakers_path = speakers_file
+    run.carry_warnings(attached_report)
+    run.record(
+        "diarize",
+        "ok" if attached_report.get("status") == "ok" else "partial",
+        wall=time.monotonic() - stage_start,
+        artifacts=[
+            diarize_dir / "diarize.json",
+            diarize_dir / SEGMENTS_NAME,
+            speakers_file,
+        ],
+        summary={**_diarize_summary(attached_report), **extra},
+    )
+
+
+def _diarize_from_segments(
+    run: _Run,
+    track: _Track,
+    options: PipelineOptions,
+    diarize_dir: Path,
+    stage_start: float,
+) -> bool:
+    """OPT-5：分段已存在（源文件/聚类参数没变）→ 只补归属，不再跑分离模型。"""
+
+    cached_turns, cached_payload = load_segments(diarize_dir / SEGMENTS_NAME)
+    if not cached_turns or options.force:
+        return False
+    if not _segments_matches(cached_payload, options, run.source, track.src_lang):
+        return False
+    _diarize_attach(
+        run,
+        track,
+        diarize_dir,
+        turns=cached_turns,
+        report=_segments_base_report(cached_payload),
+        stage_start=stage_start,
+        extra={"reused_segments": True},
+    )
+    return True
+
+
+def _diarize_fresh(
+    run: _Run,
+    track: _Track,
+    options: PipelineOptions,
+    diarize_dir: Path,
+    stage_start: float,
+) -> None:
+    """什么都没有可复用的 → 真跑一次分离（最慢的一条路）。"""
+
+    diarization = run_diarize(
+        _diarize_options(
+            options,
+            source=run.source,
+            out_dir=diarize_dir,
+            srt=track.working_srt,
+            language=track.src_lang,
+        )
+    )
+    track.speakers_path = diarization.speakers_path
+    run.carry_warnings(diarization.report)
+    run.record(
+        "diarize",
+        "ok" if diarization.status == "ok" else "partial",
+        wall=time.monotonic() - stage_start,
+        artifacts=[diarization.report_path]
+        + ([diarization.speakers_path] if diarization.speakers_path else []),
+        summary=_diarize_summary(diarization.report),
+    )
+
+
+def _map_speaker_voices(run: _Run, track: _Track, options: PipelineOptions) -> None:
+    """按说话人数分派音色；只有 1 个说话人时退回单音色（多音色没有意义）。"""
+
+    if track.speakers_path is None:
+        return
+    run.outputs["speakers_json"] = str(track.speakers_path.resolve())
+    assignments = _read_json(track.speakers_path)
+    speakers = [str(item) for item in assignments.get("speakers") or []]
+    explicit, pool = parse_speaker_voices(options.speaker_voices)
+    if not explicit and not pool:
+        pool = DEFAULT_SPEAKER_VOICES.get(options.tgt_lang, ())
+    default_voice = (
+        options.voice or DEFAULT_VOICES.get(options.tgt_lang) or "en-US-AriaNeural"
+    )
+    if len(speakers) < 2:
+        track.speakers_path = None
+        run.note("只识别到 1 个说话人，已退回单音色配音")
+        return
+    track.speaker_voice_map = build_speaker_voice_map(
+        speakers, explicit=explicit, pool=pool, default=default_voice
+    )
+    entry = run.entry("diarize")
+    if entry is not None:
+        summary = entry.setdefault("summary", {})
+        if isinstance(summary, dict):
+            summary["speaker_voices"] = dict(sorted(track.speaker_voice_map.items()))
+    if not explicit and pool and len(speakers) > len(pool):
+        run.note(
+            f"检测到 {len(speakers)} 个说话人，但只配置了 {len(pool)} 个音色，"
+            "多出来的说话人会复用前面的音色"
+        )
+
+
+def _diarize_fallback(run: _Run, track: _Track, exc: Exception) -> None:
+    """分离失败 → 诚实告警 + 退回单音色，不让整条链路白跑（成片仍然可用）。"""
+
+    run.status = "partial"
+    run.record("diarize", "failed", error=str(exc))
+    run.note(f"说话人分离失败，已退回单音色配音：{exc}")
+    track.speakers_path = None
+    track.speaker_voice_map = {}
 
 
 def _stage_merge(run: _Run, track: _Track) -> bool:
