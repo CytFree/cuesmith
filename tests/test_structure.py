@@ -104,19 +104,16 @@ PRINT_EXEMPT = {"cli"}
 ALL_EXEMPT = {"__init__", "__main__"} | WORKER_MODULES
 
 # >150 行的函数（规范 §2.3 / §10.2）：
-#   声明式 = 行数来自"字段/控件/参数有多少"，拆开只让人跳来跳去；
-#   欠债   = 与重构前的 run_pipeline 同构，等下一批拆。
+#   声明式   = 行数来自"字段/控件/参数有多少"，拆开只让人跳来跳去；
+#   入口脚本 = 一个"读参数 → 干活 → 写 JSON"的 worker 入口，拆了收益最低；
+#   欠债     = 与重构前的 run_pipeline 同构，等下一批拆。
 LENGTH_OVERRIDES = {
     # 声明式
     "gui:build_app": "Gradio 控件装配",
     "dub:_build_report": "报告字典字面量",
     "cli:_add_pipeline_args": "参数表",
-    # 欠债待拆
-    "mark:run_mark": "待拆",
-    "burn:run_burn": "待拆",
-    "asr:run_asr": "待拆",
-    "pipeline:_stage_diarize": "待拆",
-    "diarize_worker:main": "待拆",
+    # 入口脚本
+    "diarize_worker:main": "worker 入口（读 argv → 跑模型 → 写 JSON），真跑要 sherpa 才能测",
 }
 MAX_LINES = 150
 
