@@ -28,14 +28,12 @@ import subprocess
 import sys
 import time
 import wave
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Sequence
 
-from . import atomic
-from . import __version__
-from . import media
+from . import __version__, atomic, media
 from .interpreters import (
     Requirement,
     ordered_candidates,
@@ -119,7 +117,7 @@ CLUSTERING_MODES = ("auto", "sherpa", "embedding")
 DEFAULT_MERGE_ALPHA_NORMAL = 0.55
 DEFAULT_MERGE_ALPHA_COMPACT = 0.70
 
-Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
+Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 Extractor = Callable[[Path, Path], None]
 
 
@@ -997,7 +995,7 @@ class _DiarizeSession:
     outputs: list[OutputFile] = field(default_factory=list)
 
     @classmethod
-    def start(cls, options: DiarizeOptions) -> "_DiarizeSession":
+    def start(cls, options: DiarizeOptions) -> _DiarizeSession:
         """校验参数、定位解释器与模型、抽音频 —— 开工前的一次性准备。"""
 
         options.validate()

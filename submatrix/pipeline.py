@@ -36,17 +36,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import threading
 import time
-from collections.abc import Sized
+from collections.abc import Callable, Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from datetime import datetime
-import math
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
 
-from . import atomic
-from . import __version__
+from . import __version__, atomic
 from .asr import AsrError, AsrOptions, model_variant, preferred_model, run_asr
 from .burn import BurnError, BurnOptions, run_burn
 from .clean import cleanup_speakers, cleanup_srt
@@ -73,7 +71,6 @@ from .diarize import (
 from .dub import DubError, DubOptions, run_dub
 from .glossary import Glossary, glossary_fingerprint
 from .mark import MarkError, MarkOptions, run_mark
-from .tts import speech_capacity_cps
 from .matrix import MatrixOptions, run_matrix
 from .merge import MergeError, MergeOptions, run_merge
 from .probe import ProbeError, ProbeOptions, run_probe
@@ -85,6 +82,7 @@ from .translate import (
     TranslateOptions,
     run_translate,
 )
+from .tts import speech_capacity_cps
 from .validate import LANG_PROFILES, Limits
 
 __all__ = [
@@ -2086,7 +2084,7 @@ def _speakers_cache_matches(report: dict[str, object], speakers_path: Path | Non
     return bool(recorded.get("sha256")) and recorded.get("sha256") == _sha256(speakers_path)
 
 
-def _local_tts_fingerprint(options: "PipelineOptions") -> str | None:
+def _local_tts_fingerprint(options: PipelineOptions) -> str | None:
     """本地 TTS 配置指纹（模型名 + 类型 + 音色 + 目标语言），进 dub 缓存判据。"""
 
     try:

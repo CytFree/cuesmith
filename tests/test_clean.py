@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from submatrix.clean import cleanup_srt, cleanup_speakers, is_degenerate_text
+from submatrix.clean import cleanup_speakers, cleanup_srt, is_degenerate_text
 
 
 def write_srt(path, cues):

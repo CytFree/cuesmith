@@ -34,7 +34,7 @@ else:  # 脚本直跑：sys.path[0] 是 submatrix/，只能按顶层模块导入
 _VAD_JOIN_SILENCE_S = 0.15
 
 
-def _read_wav(path: Path) -> tuple["object", int]:
+def _read_wav(path: Path) -> tuple[object, int]:
     """读 16bit 单声道 wav → float32 [-1, 1] 的 numpy 数组。"""
 
     import numpy as np
@@ -116,7 +116,7 @@ def _vad_intervals(
 
 def _compact_speech(
     samples, sample_rate: int, intervals: list[tuple[int, int]]
-) -> tuple["object", list[tuple[float, float, float, float]]]:
+) -> tuple[object, list[tuple[float, float, float, float]]]:
     """把语音区间拼成一条"只有语音"的音轨，并返回时间轴映射表。
 
     映射表每项 ``(compact_start, compact_end, original_start, original_end)``（秒）。
@@ -126,7 +126,7 @@ def _compact_speech(
     import numpy as np
 
     pad = max(1, int(round(_VAD_JOIN_SILENCE_S * sample_rate)))
-    pieces: list["object"] = []
+    pieces: list[object] = []
     layout: list[tuple[float, float, float, float]] = []
     position = 0  # 已拼接的采样点数
     for start, end in intervals:
@@ -277,7 +277,7 @@ def _same_speaker_reference(within) -> float:
     return float(np.median(values))
 
 
-def _relabel_by_first_seen(labels, spans) -> "object":
+def _relabel_by_first_seen(labels, spans) -> object:
     """按簇首次出现的时间顺序重编号 0..K-1（与线上 SPEAKER_00 口径一致）。"""
 
     import numpy as np

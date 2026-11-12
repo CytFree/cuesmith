@@ -19,13 +19,12 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Sequence
 
-from . import atomic
-from . import __version__
+from . import __version__, atomic
 from .interpreters import (
     Requirement,
     ordered_candidates,
@@ -61,7 +60,7 @@ _HAS_CONTENT = re.compile(r"[A-Za-z0-9\u3400-\u4dbf\u4e00-\u9fff]")
 _CJK_EDGE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _LONE_I = re.compile(r"(?<![A-Za-z])i(?![A-Za-z])")
 
-Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
+Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 
 class AsrError(Exception):
@@ -420,7 +419,7 @@ class _AsrSession:
     words_path: Path | None = None
 
     @classmethod
-    def start(cls, options: AsrOptions) -> "_AsrSession":
+    def start(cls, options: AsrOptions) -> _AsrSession:
         """校验输入、定位解释器与模型、建输出目录——开工前的一次性准备。"""
 
         source = Path(options.src)

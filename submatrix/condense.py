@@ -16,8 +16,8 @@ CPS = 字数 / 时长，**切条不会降低 CPS**（按字数比例分时间后
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Sequence
 
 from .textutil import char_count
 

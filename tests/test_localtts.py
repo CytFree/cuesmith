@@ -67,7 +67,7 @@ def _write_stub_wav(payload: dict) -> None:
 class FakePopen:
     """替身进程；``handler(process, request, index) -> dict | "eof" | "hang"``。"""
 
-    instances: list["FakePopen"] = []
+    instances: list[FakePopen] = []
     ready_payload: dict | None = {"ok": True, "ready": True, "kind": "kokoro", "num_speakers": 54, "sample_rate": 24000}
     handler = None
 

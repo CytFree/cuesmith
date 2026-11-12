@@ -40,9 +40,9 @@ from .history import (
     task_choice_label,
 )
 from .validate import LANG_PROFILES
-from .voices import DEFAULT_LABEL, VoicesError, default_voice as default_voice_id
+from .voices import DEFAULT_LABEL, VoicesError, voice_choices, voice_id
+from .voices import default_voice as default_voice_id
 from .voices import preview_voice as synthesize_preview
-from .voices import voice_choices, voice_id
 
 __all__ = [
     "FEATURE_CHOICES",

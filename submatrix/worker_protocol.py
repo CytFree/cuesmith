@@ -34,8 +34,9 @@ import json
 import subprocess
 import sys
 import traceback
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Callable, Mapping, Protocol, Sequence
+from typing import Protocol
 
 __all__ = [
     "STDERR_TAIL_CHARS",
@@ -141,10 +142,10 @@ def describe_error(payload: Mapping[str, object]) -> str:
     return f"{error}\n{tail}" if tail else error
 
 
-def subprocess_runner(timeout_s: float) -> Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]:
+def subprocess_runner(timeout_s: float) -> Callable[[Sequence[str]], subprocess.CompletedProcess[str]]:
     """造一个"跑子进程并抓输出"的 runner（各 worker 的超时不同，其余一致）。"""
 
-    def run(command: Sequence[str]) -> "subprocess.CompletedProcess[str]":
+    def run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(  # noqa: S603 - 命令由本包自己拼装，不经过 shell
             list(command),
             capture_output=True,
@@ -162,7 +163,7 @@ def run_once(
     output_path: Path | str,
     *,
     error_cls: type[Exception],
-    runner: Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"],
+    runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]],
     label: str,
     failure_label: str | None = None,
 ) -> dict[str, object]:

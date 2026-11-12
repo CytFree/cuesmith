@@ -19,9 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from . import atomic
-from . import __version__
-from . import media
+from . import __version__, atomic, media
 from .export import dump_ass_single
 from .report import file_digest
 from .srt import load_srt
@@ -252,7 +250,7 @@ class _BurnSession:
     status: str = "ok"
 
     @classmethod
-    def start(cls, options: BurnOptions) -> "_BurnSession":
+    def start(cls, options: BurnOptions) -> _BurnSession:
         """校验输入、解析字幕并改写位置、探测源片时长——开工前的一次性准备。"""
 
         options.validate()

@@ -22,7 +22,7 @@ from submatrix.asr import model_variant, preferred_model
 from submatrix.cli import build_parser
 from submatrix.diarize import SpeakerTurn, write_segments
 from submatrix.glossary import Glossary, Term, glossary_fingerprint
-from submatrix.pipeline import PipelineError, PipelineOptions, STAGES, run_pipeline
+from submatrix.pipeline import STAGES, PipelineError, PipelineOptions, run_pipeline
 from submatrix.srt import load_srt
 from submatrix.translate import LlmConfig
 from submatrix.tts import speech_capacity_cps
@@ -664,7 +664,7 @@ def test_zh_target_defaults_voice_and_rate(tmp_path, monkeypatch) -> None:
 
 
 def test_glossary_hotwords_are_passed_to_asr(tmp_path, monkeypatch) -> None:
-    from submatrix.glossary import Term, Glossary
+    from submatrix.glossary import Glossary, Term
 
     calls = Calls()
     install_fakes(monkeypatch, calls, route="route_to_asr")

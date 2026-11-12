@@ -22,7 +22,6 @@ from submatrix.history import (
     task_choice_label,
 )
 
-
 # ---------------------------------------------------------------- 基础
 
 

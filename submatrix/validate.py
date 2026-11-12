@@ -12,7 +12,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .langs import LANG_PROFILES, LangProfile, profile as _profile
+from .langs import LANG_PROFILES, LangProfile
+from .langs import profile as _profile
 from .srt import Cue, Subtitle, format_srt_time
 from .textutil import char_count, split_text_lines
 
@@ -56,7 +57,7 @@ class Limits:
         width_src: int | None = None,
         width_tgt: int | None = None,
         max_lines: int = 2,
-    ) -> "Limits":
+    ) -> Limits:
         src_profile = _profile(src_lang)
         tgt_profile = _profile(tgt_lang)
         return cls(

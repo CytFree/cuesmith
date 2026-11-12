@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 
 __all__ = [
     "DEFAULT_FFMPEG_FLAGS",
@@ -53,13 +53,13 @@ def _text(raw: object) -> str:
     return str(raw or "")
 
 
-def stderr_text(completed: "subprocess.CompletedProcess[bytes]") -> str:
+def stderr_text(completed: subprocess.CompletedProcess[bytes]) -> str:
     """子进程 stderr 解成字符串（调用方要自己拼错误文案时用）。"""
 
     return _text(getattr(completed, "stderr", b"")).strip()
 
 
-def _failure_detail(completed: "subprocess.CompletedProcess[bytes]") -> str:
+def _failure_detail(completed: subprocess.CompletedProcess[bytes]) -> str:
     detail = _text(getattr(completed, "stderr", b"")).strip()
     if not detail:
         detail = _text(getattr(completed, "stdout", b"")).strip()
@@ -75,7 +75,7 @@ def exec_tool(
     timeout_s: float | None = None,
     env: Mapping[str, str] | None = None,
     missing_hint: str | None = None,
-) -> "subprocess.CompletedProcess[bytes]":
+) -> subprocess.CompletedProcess[bytes]:
     """跑一个外部工具（``argv[0]`` 是可执行文件名），失败翻成 ``error_cls``。
 
     ``missing_hint`` 用于工具不止一个组件的场景（bgm 会同时调 ffmpeg 和 demucs），
@@ -115,7 +115,7 @@ def run_ffmpeg(
     env: Mapping[str, str] | None = None,
     global_flags: Sequence[str] = DEFAULT_FFMPEG_FLAGS,
     missing_hint: str | None = None,
-) -> "subprocess.CompletedProcess[bytes]":
+) -> subprocess.CompletedProcess[bytes]:
     """跑 ffmpeg：默认前置 ``-v error -y``，需要 ``-nostdin`` 等全局参数时传 ``global_flags``。
 
     ``global_flags`` 与缺工具提示都只在这里定义：调用方永远只给"输入/滤镜/编码"参数，
@@ -140,7 +140,7 @@ def run_ffprobe(
     what: str = "ffprobe 探测",
     check: bool = True,
     timeout_s: float | None = None,
-) -> "subprocess.CompletedProcess[bytes]":
+) -> subprocess.CompletedProcess[bytes]:
     return exec_tool(
         [FFPROBE, *args], error_cls=error_cls, what=what, check=check, timeout_s=timeout_s
     )

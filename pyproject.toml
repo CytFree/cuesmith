@@ -9,7 +9,7 @@ dependencies = []
 # 本地 Web GUI（Gradio 薄壳）：不装也能用全部 CLI 功能
 gui = ["gradio>=6"]
 # 开发工具（不是运行时依赖）：提交前跑 pytest + pyflakes，覆盖率按需
-dev = ["pytest>=8", "pytest-cov>=7", "pyflakes>=3"]
+dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.17"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -32,3 +32,18 @@ source = ["submatrix"]
 show_missing = true
 # 基线 83%（2026-11）：worker 模块跑在子进程里，行覆盖率天然偏低，不计入门槛口径之外的解读
 fail_under = 80
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# 起步只启用"不改语义"的两组：
+#   E4/E7/E9/F = pyflakes 等价（原来就手工跑 pyflakes，换成 ruff 统一入口）
+#   I = import 顺序；UP = 现代化写法（typing.Mapping → collections.abc.Mapping 等）
+# 暂不启用 B/SIM/BLE/TRY/RUF/PLR 等"可能要求改逻辑"的规则族，见 docs/代码规范.md §10.3
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+ignore = [
+    "E501",   # 行长：本仓库注释是中文长句，120 列不够用，且强行折行会伤可读性
+    "UP031",  # % 格式化：个别日志串沿用旧写法，改动收益低于风险
+]

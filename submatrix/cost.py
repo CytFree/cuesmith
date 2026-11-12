@@ -374,7 +374,7 @@ def _build_block(
             "source": source,
             "display_currency": priced["display"]["currency"],
             "fx_base": str(pricing.get("fx_base") or "CNY"),
-            "fx": dict((pricing.get("fx") or {})),
+            "fx": dict(pricing.get("fx") or {}),
         },
         "quantities": copy.deepcopy(dict(quantities)),
         "items": priced["items"],

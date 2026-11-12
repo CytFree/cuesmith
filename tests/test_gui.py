@@ -15,7 +15,6 @@ import pytest
 from submatrix import gui
 from submatrix.cli import build_parser
 
-
 # ---------------------------------------------------------------- 参数映射
 
 

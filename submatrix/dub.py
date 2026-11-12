@@ -23,9 +23,7 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
-from . import atomic
-from . import __version__
-from . import media
+from . import __version__, atomic, media
 from .bgm import BgmError, BgmOptions, BgmResult, run_bgm
 from .report import file_digest
 from .srt import Cue, load_srt
@@ -291,7 +289,7 @@ def _cue_audio_path(
     """
 
     tag = hashlib.sha1(
-        f"{engine}|{voice}|{rate or ''}|{command or ''}|{text}".encode("utf-8")
+        f"{engine}|{voice}|{rate or ''}|{command or ''}|{text}".encode()
     ).hexdigest()[:10]
     return cache_dir / f"cue_{index:04d}_{tag}{suffix}"
 

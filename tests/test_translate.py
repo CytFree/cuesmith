@@ -1077,7 +1077,7 @@ class FakeHttpResponse:
 class FakeHttpConnection:
     """假的 HTTPSConnection：记录创建/请求，可按需让第一次请求失败。"""
 
-    instances: list["FakeHttpConnection"] = []
+    instances: list[FakeHttpConnection] = []
 
     def __init__(self, host, port=None, *, timeout=None, context=None) -> None:  # noqa: ANN001, ARG002
         self.host = host

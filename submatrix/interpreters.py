@@ -33,9 +33,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Sequence
+from typing import Literal
 
 __all__ = [
     "MISSING_CURRENT",
@@ -103,7 +104,7 @@ def bool_probe(check: Callable[[str], bool]) -> Probe:
 
 
 def runner_probe(
-    runner: Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"], module: str
+    runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]], module: str
 ) -> Probe:
     """用可注入的 runner 做 ``import <module>`` 探针（asr / diarize 的注入缝）。
 
@@ -134,7 +135,7 @@ def subprocess_probe(module: str, *, timeout_s: float = 60.0) -> Probe:
     （Edge 的 venv 在慢盘上启动要十几秒）。
     """
 
-    def runner(argv: Sequence[str]) -> "subprocess.CompletedProcess[str]":
+    def runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(  # noqa: S603 - 固定 -c 探针，参数是本机路径
             list(argv),
             capture_output=True,

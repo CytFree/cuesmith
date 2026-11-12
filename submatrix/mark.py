@@ -14,14 +14,12 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
-from . import atomic
-from . import __version__
-from . import media
+from . import __version__, atomic, media
 from .probe import MediaProbe, probe_media
 from .report import file_digest
 
@@ -382,7 +380,7 @@ class _MarkSession:
     status: str = "marked"
 
     @classmethod
-    def start(cls, options: MarkOptions) -> "_MarkSession":
+    def start(cls, options: MarkOptions) -> _MarkSession:
         """校验参数、探测源片、准备路径与元数据——开工前的一次性准备。"""
 
         options.validate()

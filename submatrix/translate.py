@@ -33,18 +33,19 @@ import threading
 import time
 import urllib.error
 import urllib.parse
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Protocol, Sequence, cast
+from typing import Protocol, cast
 
-from . import atomic
-from . import __version__
+from . import __version__, atomic
 from .clean import is_degenerate_text
 from .condense import CondenseResult, condense_text, estimate_max_chars
 from .glossary import Glossary, Term, glossary_fingerprint
-from .langs import LangProfile, profile as lang_profile
+from .langs import LangProfile
+from .langs import profile as lang_profile
 from .report import file_digest
 from .srt import Cue, Subtitle, dump_srt, load_srt
 from .textutil import char_count
@@ -150,7 +151,7 @@ class LlmConfig:
         base_url: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
-    ) -> "LlmConfig":
+    ) -> LlmConfig:
         deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
         resolved_key = (
             api_key
@@ -660,12 +661,12 @@ class ResilientTranslator:
                     self._active = following
 
 
-def _provider_name(options: "TranslateOptions") -> str:
+def _provider_name(options: TranslateOptions) -> str:
     return (options.provider or os.environ.get("SUBMATRIX_TRANSLATE_PROVIDER") or "microsoft").lower()
 
 
 def _fallback_chain(
-    options: "TranslateOptions", primary: Translator
+    options: TranslateOptions, primary: Translator
 ) -> list[Translator]:
     """备用渠道链（OPT-3）：免费 MT 失败 → 已配置的 LLM → 外部命令模板。
 
@@ -684,7 +685,7 @@ def _fallback_chain(
     return chain
 
 
-def build_translator(options: "TranslateOptions") -> Translator:
+def build_translator(options: TranslateOptions) -> Translator:
     provider = (options.provider or os.environ.get("SUBMATRIX_TRANSLATE_PROVIDER") or "microsoft").lower()
     if provider == "microsoft":
         return MicrosoftTranslator(
@@ -765,7 +766,7 @@ def _join(parts: Iterable[str], *, joiner: str) -> str:
     return joiner.join(part for part in parts if part)
 
 
-def _group_paragraphs(cues: Sequence[Cue], options: "TranslateOptions") -> list[list[int]]:
+def _group_paragraphs(cues: Sequence[Cue], options: TranslateOptions) -> list[list[int]]:
     """把相邻 cue 编成段落：上下文翻译的基本单位。"""
 
     groups: list[list[int]] = []
@@ -1205,7 +1206,7 @@ class _TranslationSession:
     wall: float = 0.0
 
     @classmethod
-    def start(cls, options: TranslateOptions) -> "_TranslationSession":
+    def start(cls, options: TranslateOptions) -> _TranslationSession:
         """校验参数、读字幕、建渠道、算三种预算——翻译开始前的一次性准备。"""
 
         if options.fallback_provider not in {"auto", "off"}:

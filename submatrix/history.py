@@ -18,9 +18,9 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Iterable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Sequence
 
 __all__ = [
     "HISTORY_HEADERS",

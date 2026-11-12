@@ -25,9 +25,9 @@ import json
 import os
 import subprocess
 import time
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Sequence
 
 from . import atomic
 from .tts import EdgeTtsEngine, TtsEngine, TtsError, find_edge_tts_python
@@ -330,7 +330,7 @@ def preview_voice(
         base.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         raise VoicesError(f"试听目录不可用：{base}（{exc}）") from exc
-    digest = hashlib.sha256(f"{voice_value}|{rate or ''}|{sample}".encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(f"{voice_value}|{rate or ''}|{sample}".encode()).hexdigest()[:10]
     out_path = base / f"{voice_value}-{digest}.mp3"
     if out_path.is_file() and out_path.stat().st_size > 0:
         return out_path

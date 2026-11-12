@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import tts_dashscope as ds  # noqa: E402
+
 from tests.support import requires_ffmpeg  # noqa: E402
 
 

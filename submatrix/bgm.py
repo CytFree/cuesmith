@@ -24,9 +24,9 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from . import media
 from .interpreters import (
@@ -174,7 +174,7 @@ _BGM_MISSING_HINT = "找不到 {tool}，请确认已安装 ffmpeg / demucs"
 
 def _run_demucs(
     command: list[str], *, what: str, timeout: float | None = None, env: dict[str, str] | None = None
-) -> "subprocess.CompletedProcess[bytes]":
+) -> subprocess.CompletedProcess[bytes]:
     """跑 demucs（不是 ffmpeg，所以走 ``exec_tool`` 而不带全局参数前缀）。"""
 
     return media.exec_tool(
@@ -193,7 +193,7 @@ def _run_ffmpeg(
     what: str,
     check: bool = True,
     global_flags: Sequence[str] = media.DEFAULT_FFMPEG_FLAGS,
-) -> "subprocess.CompletedProcess[bytes]":
+) -> subprocess.CompletedProcess[bytes]:
     """bgm 里的 ffmpeg 调用：错误类与缺工具提示固定在这里，调用点只给业务参数。"""
 
     return media.run_ffmpeg(

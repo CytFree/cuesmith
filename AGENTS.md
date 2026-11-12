@@ -35,7 +35,7 @@
 
 ```powershell
 python -m pytest -q                     # 全量；含 tests/test_structure.py 的结构检查
-python -m pyflakes submatrix tests      # 必须 0 告警
+python -m ruff check submatrix tests    # 必须 0（E4/E7/E9/F/I/UP；F 即原 pyflakes）
 ```
 
 改了较大一块逻辑时再加一条覆盖率（门槛 80%，当前 83%）：

@@ -20,9 +20,9 @@ from pathlib import Path
 import pytest
 
 from submatrix.diarize import (
-    SpeakerTurn,
     DiarizeError,
     DiarizeOptions,
+    SpeakerTurn,
     assign_speakers,
     build_speaker_voice_map,
     default_threshold,

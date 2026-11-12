@@ -12,8 +12,8 @@ import pytest
 
 from submatrix.cli import main
 from submatrix.cost import (
-    CostError,
     DEFAULT_PRICING,
+    CostError,
     build_cost,
     collect_quantities,
     cost_rows,

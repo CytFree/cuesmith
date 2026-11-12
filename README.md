@@ -141,6 +141,7 @@ BGM 保留（demucs + torch CPU）的安装命令见
 ```powershell
 python -m pytest -q                          # 854 passed, 4 skipped
 python -m pytest -q --cov=submatrix --cov-fail-under=80   # 覆盖率基线 83%（需 pytest-cov）
+python -m ruff check submatrix tests                       # 0 告警（需 ruff）
 python tools\run_samples.py --out work\regression   # 27/27
 spike\gui\.venv\Scripts\python.exe tools\gui_smoke.py   # GUI HTTP 200
 ```

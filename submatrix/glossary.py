@@ -20,10 +20,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Sequence
 
 __all__ = [
     "Glossary",
@@ -113,7 +113,7 @@ class Glossary:
     # ------------------------------------------------------------------ 读取
 
     @classmethod
-    def from_file(cls, path: str | Path) -> "Glossary":
+    def from_file(cls, path: str | Path) -> Glossary:
         """支持 .json / .tsv / .csv / .txt（一行一个禁译词）。"""
 
         source = Path(path)
@@ -133,10 +133,10 @@ class Glossary:
         return cls(terms=tuple(terms), path=source)
 
     @classmethod
-    def from_terms(cls, terms: Iterable[Term]) -> "Glossary":
+    def from_terms(cls, terms: Iterable[Term]) -> Glossary:
         return cls(terms=tuple(terms))
 
-    def reversed(self) -> "Glossary":
+    def reversed(self) -> Glossary:
         """反向术语表：zh→en 时把"英文原词→中文译法"翻成"中文→英文原词"。
 
         - 有指定译法的术语：``presentation→演示文稿`` 反向成 ``演示文稿→presentation``；

@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping
 
 from . import __version__
 from .srt import Subtitle

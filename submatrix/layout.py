@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from .langs import LANG_PROFILES
 from .srt import Cue, Subtitle, Timing
@@ -71,7 +72,7 @@ class LayoutOptions:
     tgt_cps: float = field(default_factory=lambda: LANG_PROFILES[DEFAULT_TGT_LANG].cps)
 
     @classmethod
-    def from_limits(cls, limits: "Limits") -> "LayoutOptions":
+    def from_limits(cls, limits: Limits) -> LayoutOptions:
         """按校验阈值构造排版参数。
 
         同一对字幕的"合规线"（validate）和"排版线"（layout）必须同源，

@@ -13,14 +13,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
-from . import atomic
-from . import __version__
-from . import media
+from . import __version__, atomic, media
 from .report import OutputFile, file_digest
 from .srt import load_srt
 

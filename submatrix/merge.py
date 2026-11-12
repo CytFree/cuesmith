@@ -20,8 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import atomic
-from . import __version__
+from . import __version__, atomic
 from .report import file_digest
 from .srt import Cue, Subtitle, Timing, dump_srt, load_srt
 

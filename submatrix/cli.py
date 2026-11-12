@@ -14,8 +14,9 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import NoReturn, Sequence
+from typing import NoReturn
 
 from .asr import AsrError, AsrOptions, AsrResult, run_asr
 from .burn import PRESETS, BurnError, BurnOptions, BurnResult, run_burn
