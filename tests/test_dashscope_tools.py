@@ -71,11 +71,11 @@ def test_resolve_base_url_falls_back_to_compat_domain(monkeypatch) -> None:
     assert url == "https://dashscope.aliyuncs.com/api/v1"
 
 
-def test_missing_api_key_has_actionable_message(monkeypatch) -> None:
+def test_missing_api_key_has_actionable_message(tmp_path, monkeypatch) -> None:
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
 
     with pytest.raises(ds.DashScopeError, match="DASHSCOPE_API_KEY"):
-        ds.synthesize("你好", Path("x.wav"), voice="longanyang")
+        ds.synthesize("你好", tmp_path / "x.wav", voice="longanyang")
 
 
 # ---------------------------------------------------------------- 合成
@@ -123,7 +123,7 @@ def test_synthesize_downloads_audio_url(tmp_path, monkeypatch) -> None:
     assert posted["headers"]["Authorization"] == "Bearer sk-test"
 
 
-def test_synthesize_passes_instruction(monkeypatch) -> None:
+def test_synthesize_passes_instruction(tmp_path, monkeypatch) -> None:
     captured: dict[str, object] = {}
 
     def fake_post(url, headers=None, json=None, timeout=None):  # noqa: A002
@@ -133,7 +133,7 @@ def test_synthesize_passes_instruction(monkeypatch) -> None:
     monkeypatch.setattr(ds.requests, "post", fake_post)
 
     ds.synthesize(
-        "慢一点说", Path("x.wav"), voice="v", api_key="k", instruction="请用缓慢语速"
+        "慢一点说", tmp_path / "x.wav", voice="v", api_key="k", instruction="请用缓慢语速"
     )
 
     assert captured["input"]["instruction"] == "请用缓慢语速"
