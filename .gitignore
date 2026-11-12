@@ -48,3 +48,6 @@ Desktop.ini
 htmlcov/
 .ruff_cache/
 .mypy_cache/
+
+# ---------------------------------------------------------------- 工具记忆（WorkBuddy 的 .workbuddy/memory）
+.workbuddy/
