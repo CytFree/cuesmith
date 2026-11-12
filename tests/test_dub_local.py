@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import array
 import math
-import shutil
 import wave
 from pathlib import Path
 
@@ -18,13 +17,9 @@ from submatrix import dub as dub_module
 from submatrix import localtts as localtts_module
 from submatrix.dub import DubError, DubOptions, run_dub
 from submatrix.tts import TtsError
+from tests.support import requires_media_tools
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-
-pytestmark = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
-)
+pytestmark = requires_media_tools
 
 SRT_THREE = (
     "1\n00:00:00,000 --> 00:00:02,000\nFirst line here\n"

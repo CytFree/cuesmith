@@ -10,7 +10,6 @@ VLC / Subtitle Edit 的人工核对仍作为交付前的一次性检查（见 M1
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -19,13 +18,9 @@ import pytest
 from submatrix.export import dump_ass, dump_bilingual_srt, dump_txt, dump_vtt
 from submatrix.srt import Cue, Subtitle, Timing, dump_srt, parse_srt
 from submatrix.textutil import visible_text
+from tests.support import FFMPEG, FFPROBE, requires_media_tools
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-
-pytestmark = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
-)
+pytestmark = requires_media_tools
 
 SRC = Subtitle(
     cues=(

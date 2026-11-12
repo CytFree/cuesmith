@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -29,13 +28,9 @@ from submatrix.mark import (
     run_mark,
     verify_output,
 )
+from tests.support import FFMPEG, FFPROBE, requires_media_tools
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-
-pytestmark = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
-)
+pytestmark = requires_media_tools
 
 LABEL_SECONDS = 3.0
 

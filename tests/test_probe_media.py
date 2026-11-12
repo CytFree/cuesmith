@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -21,10 +20,9 @@ from submatrix.export import dump_ass
 from submatrix.probe import ExtractionError, ProbeOptions, run_probe
 from submatrix.srt import parse_srt
 from submatrix.textutil import visible_text
+from tests.support import FFMPEG, requires_ffmpeg
 
-FFMPEG = shutil.which("ffmpeg")
-
-pytestmark = pytest.mark.skipif(FFMPEG is None, reason="ffmpeg 不在 PATH")
+pytestmark = requires_ffmpeg
 
 # 真实 PGS 样本：https://fate-suite.ffmpeg.org/sub/pgs_sub.sup（49 KB）
 PGS_SUP = Path(__file__).resolve().parents[1] / "spike" / "samples" / "pgs_sub.sup"

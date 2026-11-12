@@ -8,8 +8,6 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,28 +15,14 @@ import pytest
 from submatrix.burn import BurnError, BurnOptions, run_burn
 from submatrix.export import dump_ass_single
 from submatrix.srt import Cue, Subtitle, Timing, dump_srt, load_srt
+from tests.support import build_test_video, requires_media_tools
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-
-pytestmark = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
-)
+pytestmark = requires_media_tools
 
 
-def make_video(path: Path, seconds: float = 3.0) -> Path:
-    subprocess.run(
-        [
-            FFMPEG, "-v", "error", "-y",
-            "-f", "lavfi", "-i", f"color=c=#303030:s=640x360:d={seconds}:r=25",
-            "-f", "lavfi", "-i", f"sine=frequency=220:duration={seconds}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-shortest", str(path),
-        ],
-        capture_output=True,
-        check=True,
-    )
-    return path
+def make_video(path: Path) -> Path:
+    """本文件用的测试片：3 秒 640×360 深灰。"""
+    return build_test_video(path, seconds=3, color="#303030", size="640x360")
 
 
 def write_srt(path: Path, start: int, end: int, text: str) -> Path:

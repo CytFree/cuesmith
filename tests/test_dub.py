@@ -10,7 +10,6 @@ import array
 import importlib.util
 import json
 import math
-import shutil
 import subprocess
 import sys
 import threading
@@ -28,13 +27,9 @@ from submatrix.dub import (
     run_dub,
 )
 from submatrix.tts import CommandTtsEngine, EdgeTtsEngine, TtsError, parse_rate
+from tests.support import FFMPEG, FFPROBE, build_test_video, requires_media_tools
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-
-pytestmark = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
-)
+pytestmark = requires_media_tools
 
 
 @pytest.fixture(autouse=True)
@@ -565,18 +560,8 @@ def test_audio_is_placed_at_slot_start(tmp_path) -> None:
 
 
 def make_video(path: Path) -> Path:
-    subprocess.run(
-        [
-            FFMPEG, "-v", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=#202020:s=320x240:d=6:r=25",
-            "-f", "lavfi", "-i", "sine=frequency=220:duration=6",
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-shortest", str(path),
-        ],
-        capture_output=True,
-        check=True,
-    )
-    return path
+    """本文件用的测试片：6 秒 320×240 深灰。"""
+    return build_test_video(path, seconds=6, color="#202020", size="320x240")
 
 
 def test_muxes_audio_into_video(tmp_path) -> None:

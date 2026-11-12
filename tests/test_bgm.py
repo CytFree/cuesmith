@@ -9,7 +9,6 @@ from __future__ import annotations
 import array
 import json
 import math
-import shutil
 import subprocess
 import wave
 from pathlib import Path
@@ -29,13 +28,9 @@ from submatrix.bgm import (
     run_bgm,
 )
 from submatrix.dub import DubError, DubOptions, run_dub
+from tests.support import FFMPEG, FFPROBE, build_test_video, requires_media_tools
 
-FFMPEG = shutil.which("ffmpeg")
-FFPROBE = shutil.which("ffprobe")
-
-pytestmark = pytest.mark.skipif(
-    FFMPEG is None or FFPROBE is None, reason="ffmpeg / ffprobe 不在 PATH"
-)
+pytestmark = requires_media_tools
 
 SAMPLE_RATE = 24000
 
@@ -102,18 +97,8 @@ def peak(path: Path) -> int:
 
 
 def make_video(path: Path) -> Path:
-    subprocess.run(
-        [
-            FFMPEG, "-v", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=#202020:s=320x240:d=2:r=25",
-            "-f", "lavfi", "-i", "sine=frequency=220:duration=2",
-            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-shortest", str(path),
-        ],
-        capture_output=True,
-        check=True,
-    )
-    return path
+    """本文件用的测试片：2 秒 320×240 深灰。"""
+    return build_test_video(path, seconds=2, color="#202020", size="320x240")
 
 
 # ---------------------------------------------------------------- 滤镜图

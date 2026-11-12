@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import json
-import shutil
 import sys
 import wave
 from pathlib import Path
@@ -19,8 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import tts_dashscope as ds  # noqa: E402
-
-FFMPEG = shutil.which("ffmpeg")
+from tests.support import requires_ffmpeg  # noqa: E402
 
 
 class FakeResponse:
@@ -192,7 +190,7 @@ def test_encode_audio_data_uri_roundtrip(tmp_path) -> None:
     assert base64.b64decode(uri.split(",", 1)[1]) == audio.read_bytes()
 
 
-@pytest.mark.skipif(FFMPEG is None, reason="ffmpeg 不在 PATH")
+@requires_ffmpeg
 def test_normalize_reference_rejects_too_short(tmp_path) -> None:
     audio = make_wav(tmp_path / "short.wav", 2.0)
 
@@ -200,7 +198,7 @@ def test_normalize_reference_rejects_too_short(tmp_path) -> None:
         ds.normalize_reference(audio, tmp_path / "out.wav")
 
 
-@pytest.mark.skipif(FFMPEG is None, reason="ffmpeg 不在 PATH")
+@requires_ffmpeg
 def test_normalize_reference_converts_to_mono_24k(tmp_path) -> None:
     audio = make_wav(tmp_path / "long.wav", 12.0)
 
@@ -212,7 +210,7 @@ def test_normalize_reference_converts_to_mono_24k(tmp_path) -> None:
     assert normalized.stat().st_size < ds.MAX_REFERENCE_BYTES
 
 
-@pytest.mark.skipif(FFMPEG is None, reason="ffmpeg 不在 PATH")
+@requires_ffmpeg
 def test_create_voice_and_wait_ready(tmp_path, monkeypatch) -> None:
     audio = make_wav(tmp_path / "long.wav", 12.0)
     calls: list[dict] = []
