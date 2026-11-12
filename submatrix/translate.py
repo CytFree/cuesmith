@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
@@ -43,7 +43,7 @@ from . import __version__
 from .clean import is_degenerate_text
 from .condense import CondenseResult, condense_text, estimate_max_chars
 from .glossary import Glossary, Term, glossary_fingerprint
-from .langs import profile as lang_profile
+from .langs import LangProfile, profile as lang_profile
 from .report import file_digest
 from .srt import Cue, Subtitle, dump_srt, load_srt
 from .textutil import char_count
@@ -1135,275 +1135,405 @@ def _sentence_budgets(
 
 
 def run_translate(options: TranslateOptions) -> TranslateResult:
-    if options.fallback_provider not in {"auto", "off"}:
-        raise TranslateError("渠道回退只支持 auto / off")
-    src_profile = _profile(options.src_lang)
-    tgt_profile = _profile(options.tgt_lang)
-    subtitle, encoding = load_srt(options.src)
-    if len(subtitle) == 0:
-        raise TranslateError("输入字幕里没有可用 cue")
+    """把一条 SRT 翻成目标语言，写 ``<tgt>.srt`` 与 ``translate.json``。
 
-    primary = build_translator(options)
-    # OPT-3：主渠道是免费 MT 时，网络类失败自动切到备用渠道（不再整条链路 failed）
-    alternatives = _fallback_chain(options, primary)
-    working: Translator = (
-        ResilientTranslator(primary, alternatives) if alternatives else primary
-    )
-    # LLM 渠道的兜底：输出退化/非 JSON 时回退免费 MT（单条噪声不应毁掉整条链路）
-    fallback = MicrosoftTranslator() if isinstance(primary, OpenAITranslator) else None
-    fallback_notes: list[str] = []
-    glossary = options.glossary
-    cleaned = [clean_source(cue.text, cjk=src_profile.cjk) for cue in subtitle.cues]
-    joiner_tgt = _JOINERS.get(options.tgt_lang, " ")
-    started = time.monotonic()
-    target_cps = options.target_cps or tgt_profile.cps
-    cue_budgets = _cue_budgets(subtitle.cues, target_cps)
-    # 精简预算：字幕阅读预算与配音槽位容量预算**取严的那个**——两个约束都得满足。
-    # 默认语速下容量预算比阅读预算宽（中文 9.57 vs 9、英文 29.4 vs 20），所以实际由阅读
-    # 预算把关（字幕可读性不能被牺牲）；只有 `--tts-rate` 调低到 TTS 根本念不完时，
-    # 容量预算才会变成更严的那个，提前精简掉口播放不下的内容。
-    condense_budgets = list(cue_budgets)
-    dub_budgets: list[int] | None = None
-    if options.dub_cps_budget and options.dub_cps_budget > 0:
-        dub_budgets = _slot_budgets(subtitle.cues, float(options.dub_cps_budget))
-        condense_budgets = [
-            min(reading, dub) for reading, dub in zip(cue_budgets, dub_budgets)
-        ]
+    四个阶段各自独立可读：翻译（三种上下文策略）→ LLM 审校 → 译后精简 → 落盘与报告。
+    阶段之间只通过 :class:`_TranslationSession` 交接，不再共用一大片局部变量。
+    """
 
-    texts: list[str | None] = [None] * len(cleaned)
-    sentences_total = 0
-    paragraphs_total = 0
-    fallback_cues: list[int] = []
-    lost_terms: list[Term] = []
-    review_changed = 0
+    session = _TranslationSession.start(options)
+    _translate_cues(session)
+    _review_translations(session)
+    _condense_translations(session)
+    return _write_outputs(session)
 
-    # OPT-5：分块/分段落并发（结果按原顺序拼回；并发只影响墙钟，不影响对齐）
-    workers = max(1, int(options.concurrency))
+
+@dataclass(slots=True)
+class _TranslationSession:
+    """一次翻译的现场：渠道、逐条译文与过程统计。
+
+    这些字段以前全是 ``run_translate`` 的局部变量 —— 299 行里四个阶段共用一个
+    命名空间，``texts`` 先被翻译写入、再被审校覆盖、又被精简覆盖一遍，读的时候
+    得先记住"现在走到哪一步"。收成一个记录之后，每个阶段只声明自己读写哪几个字段。
+    """
+
+    options: TranslateOptions
+    src_profile: LangProfile
+    tgt_profile: LangProfile
+    subtitle: Subtitle
+    encoding: str
+    primary: Translator
+    working: Translator
+    fallback: Translator | None
+    fallback_notes: list[str]
+    glossary: Glossary | None
+    cleaned: list[str]
+    joiner_tgt: str
+    started: float
+    target_cps: float
+    cue_budgets: list[int]
+    dub_budgets: list[int] | None
+    condense_budgets: list[int]
+    texts: list[str | None]
+    rewriter: Callable[[str, int], str] | None = None
+    sentences_total: int = 0
+    paragraphs_total: int = 0
+    fallback_cues: list[int] = field(default_factory=list)
+    lost_terms: list[Term] = field(default_factory=list)
+    review_changed: int = 0
+    review_changes: list[dict[str, object]] = field(default_factory=list)
+    review_passes: int = 0
+    review_failed: int = 0
+    pre_condense: list[str] = field(default_factory=list)
+    condense_results: list[CondenseResult] = field(default_factory=list)
+    final_texts: list[str] = field(default_factory=list)
+    wall: float = 0.0
+
+    @classmethod
+    def start(cls, options: TranslateOptions) -> "_TranslationSession":
+        """校验参数、读字幕、建渠道、算三种预算——翻译开始前的一次性准备。"""
+
+        if options.fallback_provider not in {"auto", "off"}:
+            raise TranslateError("渠道回退只支持 auto / off")
+        src_profile = _profile(options.src_lang)
+        tgt_profile = _profile(options.tgt_lang)
+        subtitle, encoding = load_srt(options.src)
+        if len(subtitle) == 0:
+            raise TranslateError("输入字幕里没有可用 cue")
+
+        primary = build_translator(options)
+        # OPT-3：主渠道是免费 MT 时，网络类失败自动切到备用渠道（不再整条链路 failed）
+        alternatives = _fallback_chain(options, primary)
+        working: Translator = (
+            ResilientTranslator(primary, alternatives) if alternatives else primary
+        )
+        # LLM 渠道的兜底：输出退化/非 JSON 时回退免费 MT（单条噪声不应毁掉整条链路）
+        fallback = MicrosoftTranslator() if isinstance(primary, OpenAITranslator) else None
+        cleaned = [clean_source(cue.text, cjk=src_profile.cjk) for cue in subtitle.cues]
+        target_cps = options.target_cps or tgt_profile.cps
+        cue_budgets = _cue_budgets(subtitle.cues, target_cps)
+        # 精简预算：字幕阅读预算与配音槽位容量预算**取严的那个**——两个约束都得满足。
+        # 默认语速下容量预算比阅读预算宽（中文 9.57 vs 9、英文 29.4 vs 20），所以实际由阅读
+        # 预算把关（字幕可读性不能被牺牲）；只有 `--tts-rate` 调低到 TTS 根本念不完时，
+        # 容量预算才会变成更严的那个，提前精简掉口播放不下的内容。
+        condense_budgets = list(cue_budgets)
+        dub_budgets: list[int] | None = None
+        if options.dub_cps_budget and options.dub_cps_budget > 0:
+            dub_budgets = _slot_budgets(subtitle.cues, float(options.dub_cps_budget))
+            condense_budgets = [
+                min(reading, dub) for reading, dub in zip(cue_budgets, dub_budgets)
+            ]
+
+        return cls(
+            options=options,
+            src_profile=src_profile,
+            tgt_profile=tgt_profile,
+            subtitle=subtitle,
+            encoding=encoding,
+            primary=primary,
+            working=working,
+            fallback=fallback,
+            fallback_notes=[],
+            glossary=options.glossary,
+            cleaned=cleaned,
+            joiner_tgt=_JOINERS.get(options.tgt_lang, " "),
+            started=time.monotonic(),
+            target_cps=target_cps,
+            cue_budgets=cue_budgets,
+            dub_budgets=dub_budgets,
+            condense_budgets=condense_budgets,
+            texts=[None] * len(cleaned),
+        )
+
+
+def _translate_cues(session: _TranslationSession) -> None:
+    """阶段一：按 ``--context`` 把 cue 翻成译文（含分块并发与退化回退）。
+
+    OPT-5：分块/分段落并发（结果按原顺序拼回；并发只影响墙钟，不影响对齐）。
+    """
+
+    workers = max(1, int(session.options.concurrency))
     pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
     try:
-        if options.context == "off":
-            translated, lost = _translate_units(
-                working, cleaned, src=options.src_lang, tgt=options.tgt_lang,
-                glossary=glossary, batch_size=options.batch_size, budgets=cue_budgets,
-                fallback=fallback, notes=fallback_notes, pool=pool,
-            )
-            texts = list(translated)
-            sentences_total = len(cleaned)
-            lost_terms.extend(lost)
-        elif options.context == "sentence":
-            units: list[str] = []
-            owners: list[int] = []
-            for index, text in enumerate(cleaned):
-                for sentence in split_sentences(text, cjk=src_profile.cjk):
-                    units.append(sentence)
-                    owners.append(index)
-            translated, lost = _translate_units(
-                working, units, src=options.src_lang, tgt=options.tgt_lang,
-                glossary=glossary, batch_size=options.batch_size,
-                budgets=_sentence_budgets(units, owners, cue_budgets, cleaned),
-                fallback=fallback, notes=fallback_notes, pool=pool,
-            )
-            lost_terms.extend(lost)
-            sentences_total = len(units)
-            grouped: dict[int, list[str]] = {}
-            for owner, sentence in zip(owners, translated):
-                grouped.setdefault(owner, []).append(sentence)
-            for index in range(len(cleaned)):
-                texts[index] = _join(grouped.get(index, []), joiner=joiner_tgt)
+        mode = session.options.context
+        if mode == "off":
+            _translate_by_cue(session, pool)
+        elif mode == "sentence":
+            _translate_by_sentence(session, pool)
         else:
-            paragraphs = _group_paragraphs(subtitle.cues, options)
-            paragraphs_total = len(paragraphs)
-            jobs: list[tuple[list[int], list[tuple[int, str]], list[str], list[int]]] = []
-            for group in paragraphs:
-                # 段落上下文 = 整段所有句子放进同一个请求；返回同样多的句子后按"句子属于哪条 cue"
-                # 拼回去。对齐是精确的（不靠字数比例猜），同时模型能看到整段的上下文。
-                source_sentences = _source_sentences(subtitle.cues, group, cjk=src_profile.cjk)
-                units = [sentence for _, sentence in source_sentences]
-                owners = [cue_index for cue_index, _ in source_sentences]
-                jobs.append((group, source_sentences, units, owners))
-
-            def run_group(job):  # noqa: ANN001, ANN202
-                _group, _source, units, owners = job
-                return _translate_units(
-                    working,
-                    units,
-                    src=options.src_lang,
-                    tgt=options.tgt_lang,
-                    glossary=glossary,
-                    batch_size=len(units) or 1,
-                    budgets=_sentence_budgets(units, owners, cue_budgets, cleaned),
-                    fallback=fallback,
-                    notes=fallback_notes,
-                )
-
-            if pool is not None and len(jobs) > 1:
-                results = list(pool.map(run_group, jobs))
-            else:
-                results = [run_group(job) for job in jobs]
-
-            missing: list[tuple[int, str]] = []
-            for (group, source_sentences, _units, _owners), (translated, lost) in zip(
-                jobs, results
-            ):
-                lost_terms.extend(lost)
-                sentences_total += len(translated)
-                buckets: dict[int, list[str]] = {cue_index: [] for cue_index in group}
-                for (cue_index, _), sentence in zip(source_sentences, translated):
-                    buckets[cue_index].append(sentence)
-                for cue_index in group:
-                    text = _join(buckets[cue_index], joiner=joiner_tgt)
-                    if text:
-                        texts[cue_index] = text
-                    else:
-                        missing.append((cue_index, cleaned[cue_index]))
-                        fallback_cues.append(cue_index)
-
-            if missing:
-                translated, lost = _translate_units(
-                    working,
-                    [text for _, text in missing],
-                    src=options.src_lang,
-                    tgt=options.tgt_lang,
-                    glossary=glossary,
-                    batch_size=options.batch_size,
-                    budgets=[cue_budgets[cue_index] for cue_index, _ in missing],
-                    fallback=fallback,
-                    notes=fallback_notes,
-                    pool=pool,
-                )
-                lost_terms.extend(lost)
-                for (cue_index, _), text in zip(missing, translated):
-                    texts[cue_index] = text
+            _translate_by_paragraph(session, pool)
     finally:
         if pool is not None:
             pool.shutdown(wait=False)
 
-    if any(text is None for text in texts):
+    if any(text is None for text in session.texts):
         raise TranslateError("内部错误：有 cue 没拿到译文")
+    if session.tgt_profile.cjk:
+        session.texts = _normalize_texts(session.texts)
 
-    if tgt_profile.cjk:
-        texts = _normalize_texts(texts)
 
-    # 第二遍审校（可选）：只让模型改明显错误；多轮时上一轮成品进下一轮，用来拦漏网误译
-    review_failed = 0
-    review_changes: list[dict[str, object]] = []
-    review_passes = 0
-    if options.llm_review:
-        if not isinstance(primary, OpenAITranslator):
-            raise TranslateError("--llm-review 需要 LLM 渠道（--provider openai 或配置 LLM 端点）")
-        for pass_index in range(1, max(1, options.llm_review_passes) + 1):
-            pass_changed = 0
-            for group in _group_paragraphs(subtitle.cues, options):
-                items = [
-                    (index, cleaned[index], texts[index] or "") for index in group if texts[index]
-                ]
-                if not items:
-                    continue
-                try:
-                    reviewed = primary.review(
-                        [(source, translation) for _, source, translation in items],
-                        src=options.src_lang,
-                        tgt=options.tgt_lang,
+def _translate_by_cue(session: _TranslationSession, pool: ThreadPoolExecutor | None) -> None:
+    """``--context off``：一条 cue 就是一个翻译单位，没有上下文。"""
+
+    options = session.options
+    translated, lost = _translate_units(
+        session.working,
+        session.cleaned,
+        src=options.src_lang,
+        tgt=options.tgt_lang,
+        glossary=session.glossary,
+        batch_size=options.batch_size,
+        budgets=session.cue_budgets,
+        fallback=session.fallback,
+        notes=session.fallback_notes,
+        pool=pool,
+    )
+    session.texts = list(translated)
+    session.sentences_total = len(session.cleaned)
+    session.lost_terms.extend(lost)
+
+
+def _translate_by_sentence(session: _TranslationSession, pool: ThreadPoolExecutor | None) -> None:
+    """``--context sentence``：按句子翻，译完按"句子属于哪条 cue"拼回去。"""
+
+    options = session.options
+    units: list[str] = []
+    owners: list[int] = []
+    for index, text in enumerate(session.cleaned):
+        for sentence in split_sentences(text, cjk=session.src_profile.cjk):
+            units.append(sentence)
+            owners.append(index)
+    translated, lost = _translate_units(
+        session.working,
+        units,
+        src=options.src_lang,
+        tgt=options.tgt_lang,
+        glossary=session.glossary,
+        batch_size=options.batch_size,
+        budgets=_sentence_budgets(units, owners, session.cue_budgets, session.cleaned),
+        fallback=session.fallback,
+        notes=session.fallback_notes,
+        pool=pool,
+    )
+    session.lost_terms.extend(lost)
+    session.sentences_total = len(units)
+    grouped: dict[int, list[str]] = {}
+    for owner, sentence in zip(owners, translated):
+        grouped.setdefault(owner, []).append(sentence)
+    for index in range(len(session.cleaned)):
+        session.texts[index] = _join(grouped.get(index, []), joiner=session.joiner_tgt)
+
+
+def _translate_by_paragraph(session: _TranslationSession, pool: ThreadPoolExecutor | None) -> None:
+    """``--context paragraph``：整段（2–4 条相邻 cue 的所有句子）一次请求。
+
+    对齐是精确的（不靠字数比例猜）：返回同样多的句子，再按"句子属于哪条 cue"
+    拼回去，同时模型能看到整段的上下文。拼回来为空的 cue 收集起来再补翻一次。
+    """
+
+    options = session.options
+    paragraphs = _group_paragraphs(session.subtitle.cues, options)
+    session.paragraphs_total = len(paragraphs)
+    jobs: list[tuple[list[int], list[tuple[int, str]], list[str], list[int]]] = []
+    for group in paragraphs:
+        source_sentences = _source_sentences(
+            session.subtitle.cues, group, cjk=session.src_profile.cjk
+        )
+        units = [sentence for _, sentence in source_sentences]
+        owners = [cue_index for cue_index, _ in source_sentences]
+        jobs.append((group, source_sentences, units, owners))
+
+    def run_group(job):  # noqa: ANN001, ANN202
+        _group, _source, units, owners = job
+        return _translate_units(
+            session.working,
+            units,
+            src=options.src_lang,
+            tgt=options.tgt_lang,
+            glossary=session.glossary,
+            batch_size=len(units) or 1,
+            budgets=_sentence_budgets(units, owners, session.cue_budgets, session.cleaned),
+            fallback=session.fallback,
+            notes=session.fallback_notes,
+        )
+
+    if pool is not None and len(jobs) > 1:
+        results = list(pool.map(run_group, jobs))
+    else:
+        results = [run_group(job) for job in jobs]
+
+    missing: list[tuple[int, str]] = []
+    for (group, source_sentences, _units, _owners), (translated, lost) in zip(jobs, results):
+        session.lost_terms.extend(lost)
+        session.sentences_total += len(translated)
+        buckets: dict[int, list[str]] = {cue_index: [] for cue_index in group}
+        for (cue_index, _), sentence in zip(source_sentences, translated):
+            buckets[cue_index].append(sentence)
+        for cue_index in group:
+            text = _join(buckets[cue_index], joiner=session.joiner_tgt)
+            if text:
+                session.texts[cue_index] = text
+            else:
+                missing.append((cue_index, session.cleaned[cue_index]))
+                session.fallback_cues.append(cue_index)
+
+    if missing:
+        translated, lost = _translate_units(
+            session.working,
+            [text for _, text in missing],
+            src=options.src_lang,
+            tgt=options.tgt_lang,
+            glossary=session.glossary,
+            batch_size=options.batch_size,
+            budgets=[session.cue_budgets[cue_index] for cue_index, _ in missing],
+            fallback=session.fallback,
+            notes=session.fallback_notes,
+            pool=pool,
+        )
+        session.lost_terms.extend(lost)
+        for (cue_index, _), text in zip(missing, translated):
+            session.texts[cue_index] = text
+
+
+def _review_translations(session: _TranslationSession) -> None:
+    """阶段二（可选）：LLM 第二遍审校，只改明显错误；多轮时上一轮成品进下一轮。
+
+    审校是加分项：单段失败不毁整批（记 ``review_failed``，保留初译并如实报告）。
+    """
+
+    options = session.options
+    if not options.llm_review:
+        return
+    if not isinstance(session.primary, OpenAITranslator):
+        raise TranslateError("--llm-review 需要 LLM 渠道（--provider openai 或配置 LLM 端点）")
+
+    for pass_index in range(1, max(1, options.llm_review_passes) + 1):
+        pass_changed = 0
+        for group in _group_paragraphs(session.subtitle.cues, options):
+            items = [
+                (index, session.cleaned[index], session.texts[index] or "")
+                for index in group
+                if session.texts[index]
+            ]
+            if not items:
+                continue
+            try:
+                reviewed = session.primary.review(
+                    [(source, translation) for _, source, translation in items],
+                    src=options.src_lang,
+                    tgt=options.tgt_lang,
+                )
+            except TranslateError:
+                session.review_failed += 1
+                continue
+            for (index, _source, before), after in zip(items, reviewed):
+                fixed = _flatten(after)
+                if fixed and fixed != before:
+                    pass_changed += 1
+                    session.review_changed += 1
+                    session.review_changes.append(
+                        {"cue": index + 1, "pass": pass_index, "before": before, "after": fixed}
                     )
-                except TranslateError:
-                    # 审校是加分项：单段失败不该毁掉整批翻译，保留初译并如实报告
-                    review_failed += 1
-                    continue
-                for (index, _source, before), after in zip(items, reviewed):
-                    fixed = _flatten(after)
-                    if fixed and fixed != before:
-                        pass_changed += 1
-                        review_changed += 1
-                        review_changes.append(
-                            {"cue": index + 1, "pass": pass_index, "before": before, "after": fixed}
-                        )
-                    if fixed:
-                        texts[index] = fixed
-            review_passes = pass_index
-            if pass_changed == 0:
-                break  # 收敛：上一轮一条都没改，没必要再花 token
-        if tgt_profile.cjk:
-            texts = _normalize_texts(texts)
+                if fixed:
+                    session.texts[index] = fixed
+        session.review_passes = pass_index
+        if pass_changed == 0:
+            break  # 收敛：上一轮一条都没改，没必要再花 token
+    if session.tgt_profile.cjk:
+        session.texts = _normalize_texts(session.texts)
 
-    # 译后精简：默认开启，只碰超过目标 CPS 的条目（--no-condense 关闭）
-    # 术语译法是硬约束：精简时不许把它当措辞删掉（宁可超 CPS）
-    keep_terms = [term.replacement for term in glossary] if glossary else []
-    pre_condense = [text or "" for text in texts]
-    condense_results: list[CondenseResult] = []
-    rewriter = _build_rewriter(primary, options)
-    for cue, text in zip(subtitle.cues, pre_condense):
+
+def _condense_translations(session: _TranslationSession) -> None:
+    """阶段三：译后精简（默认开），只碰超过目标 CPS 的条目。
+
+    术语译法是硬约束：精简时不许把它当措辞删掉（宁可超 CPS）。
+    """
+
+    options = session.options
+    keep_terms = [term.replacement for term in session.glossary] if session.glossary else []
+    session.pre_condense = [text or "" for text in session.texts]
+    session.rewriter = _build_rewriter(session.primary, options)
+    for cue, text in zip(session.subtitle.cues, session.pre_condense):
         if not options.condense or not text:
-            condense_results.append(CondenseResult(text, "none", 0, 0, False))
+            session.condense_results.append(CondenseResult(text, "none", 0, 0, False))
             continue
-        condense_results.append(
+        session.condense_results.append(
             condense_text(
                 text,
-                condense_budgets[len(condense_results)],
+                session.condense_budgets[len(session.condense_results)],
                 mode=options.condense_mode,
-                cjk=tgt_profile.cjk,
-                rewriter=rewriter,
+                cjk=session.tgt_profile.cjk,
+                rewriter=session.rewriter,
                 keep=keep_terms,
             )
         )
-    final_texts = [result.text for result in condense_results]
-    if tgt_profile.cjk:
+    final_texts = [result.text for result in session.condense_results]
+    if session.tgt_profile.cjk:
         final_texts = _normalize_texts(final_texts)
     else:
         # 英文目标：ASR 源文常缺句号，补上（源文以逗号收尾=话没说完，不补）
         final_texts = [
             _ensure_en_terminal(
                 text,
-                continues=cleaned[index].rstrip().endswith(("，", ",", "；", ";", "：", ":")),
+                continues=session.cleaned[index]
+                .rstrip()
+                .endswith(("，", ",", "；", ";", "：", ":")),
             ).strip()
             for index, text in enumerate(final_texts)
         ]
-    wall = time.monotonic() - started
+    session.final_texts = final_texts
 
+
+def _write_outputs(session: _TranslationSession) -> TranslateResult:
+    """阶段四：写译文 SRT + ``translate.json``，返回命令行契约。"""
+
+    options = session.options
+    session.wall = time.monotonic() - session.started
     out_dir = Path(options.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_name = options.out_name or f"{options.tgt_lang}.srt"
     output_path = out_dir / out_name
     cues = [
         Cue(timing=cue.timing, text=text)
-        for cue, text in zip(subtitle.cues, final_texts)
+        for cue, text in zip(session.subtitle.cues, session.final_texts)
     ]
     output_path.write_text(
         dump_srt(Subtitle(cues=tuple(cues))), encoding="utf-8", newline="\n"
     )
 
     actions: dict[str, int] = {}
-    for result in condense_results:
+    for result in session.condense_results:
         actions[result.action] = actions.get(result.action, 0) + 1
-    rewriter_kind = "llm" if rewriter is not None else "rules"
+    rewriter_kind = "llm" if session.rewriter is not None else "rules"
 
     outcome = _Outcome(
-        subtitle=subtitle,
-        encoding=encoding,
+        subtitle=session.subtitle,
+        encoding=session.encoding,
         cues=cues,
-        final_texts=final_texts,
-        pre_condense=pre_condense,
-        condense_results=condense_results,
+        final_texts=session.final_texts,
+        pre_condense=session.pre_condense,
+        condense_results=session.condense_results,
         actions=actions,
         rewriter_kind=rewriter_kind,
-        sentences=sentences_total,
-        paragraphs=paragraphs_total,
-        fallback_cues=fallback_cues,
-        lost_terms=lost_terms,
-        review_changed=review_changed,
-        review_changes=review_changes,
-        review_passes=review_passes,
-        review_failed=review_failed,
-        fallback_notes=fallback_notes,
-        working=working,
-        primary=primary,
+        sentences=session.sentences_total,
+        paragraphs=session.paragraphs_total,
+        fallback_cues=session.fallback_cues,
+        lost_terms=session.lost_terms,
+        review_changed=session.review_changed,
+        review_changes=session.review_changes,
+        review_passes=session.review_passes,
+        review_failed=session.review_failed,
+        fallback_notes=session.fallback_notes,
+        working=session.working,
+        primary=session.primary,
         output_path=output_path,
-        target_cps=target_cps,
-        cue_budgets=cue_budgets,
-        dub_budgets=dub_budgets,
-        wall=wall,
+        target_cps=session.target_cps,
+        cue_budgets=session.cue_budgets,
+        dub_budgets=session.dub_budgets,
+        wall=session.wall,
     )
     warnings, dub_summary, cps_stats = _translate_warnings(
-        options, outcome, cjk=tgt_profile.cjk
+        options, outcome, cjk=session.tgt_profile.cjk
     )
     report = _translate_report(
         options,
@@ -1411,7 +1541,7 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         warnings=warnings,
         dub_summary=dub_summary,
         cps=cps_stats,
-        cjk=tgt_profile.cjk,
+        cjk=session.tgt_profile.cjk,
     )
     report_path = out_dir / "translate.json"
     report_path.write_text(
@@ -1428,6 +1558,9 @@ def run_translate(options: TranslateOptions) -> TranslateResult:
         output_path=output_path.resolve(),
         cues=len(cues),
     )
+
+
+
 
 
 
