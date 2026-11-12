@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -346,190 +346,254 @@ def run_mark(
     *,
     verifier: Callable[..., dict[str, object]] = verify_output,
 ) -> MarkResult:
-    options.validate()
+    """在成片上打 AIGC 显式标识 + 写隐式元数据，并自动回读核验。
 
-    source = Path(options.src).resolve()
-    if not source.is_file():
-        raise MarkError(f"输入文件不存在：{source}")
+    两条路：``self_use`` 只转封装 + 落免责声明；正常模式烧标识、写元数据、抽证物帧
+    并回读核验（核验不过 → ``verify_failed``，退出码 2）。
+    """
 
-    out_dir = Path(options.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    video_path = out_dir / "marked.mp4"
-    report_path = out_dir / "mark.json"
-    generated_at = options.generated_at or datetime.now().astimezone()
-    content_id = options.content_id or new_content_id()
+    session = _MarkSession.start(options)
+    if session.options.self_use:
+        _mark_self_use(session)
+    else:
+        _mark_labeled(session, verifier=verifier)
+    return _write_outputs(session)
 
-    probe = probe_media(source)
-    duration_s = probe.duration_s
-    notes: list[str] = []
-    if duration_s is not None and duration_s < options.label_seconds + 1:
-        notes.append(
-            f"输入只有 {duration_s:.2f} 秒，短于标识时长 + 1 秒，核验点已按片长裁剪"
-        )
 
-    metadata = build_metadata(options, content_id)
+@dataclass(slots=True)
+class _MarkSession:
+    """一次标识的现场：探测结果、路径、核验结论与告警。"""
+
+    options: MarkOptions
+    source: Path
+    out_dir: Path
+    video_path: Path
+    report_path: Path
+    generated_at: datetime
+    content_id: str
+    probe: MediaProbe
+    duration_s: float | None
+    notes: list[str] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
     label_frame: Path | None = None
     font: Path | None = None
     geometry: LabelGeometry | None = None
-    verification: dict[str, object]
+    verification: dict[str, object] = field(default_factory=dict)
+    status: str = "marked"
 
-    if options.self_use:
-        _run_ffmpeg(
-            [
-                "-i",
-                str(source),
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a?",
-                "-c",
-                "copy",
-                "-movflags",
-                "+faststart",
-                str(video_path),
-            ],
-            what="自用模式转封装",
-        )
-        notice = {
-            "schema_version": 1,
-            "tool": "submatrix",
-            "command": "mark",
-            "mode": "self_use",
-            "generated_at": generated_at.isoformat(),
-            "notice": SELF_USE_NOTICE,
-            "input": {
-                "path": str(source),
-                "bytes": source.stat().st_size,
-                "sha256": file_digest(source)[1],
-            },
-            "output": {"path": str(video_path.resolve())},
-        }
-        (out_dir / "self_use_notice.json").write_text(
-            json.dumps(notice, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-        )
-        status = "self_use"
-        verification = {
-            "metadata_roundtrip": {"ok": True, "skipped": True, "fields": {}, "missing": []},
-            "explicit_label": {"ok": True, "skipped": True, "samples": [], "threshold": 0.0},
-        }
-        metadata = {}
-    else:
-        font = resolve_font(options.font_file)
-        width, height = _video_size(probe)
-        geometry = label_geometry(width, height, options.position)
+    @classmethod
+    def start(cls, options: MarkOptions) -> "_MarkSession":
+        """校验参数、探测源片、准备路径与元数据——开工前的一次性准备。"""
 
-        label_file = out_dir / "label.txt"
-        label_file.write_text(options.label_text, encoding="utf-8", newline="\n")
-        filter_text = build_drawtext(
-            textfile=label_file.resolve(),
-            font_file=font,
-            geometry=geometry,
-            seconds=options.label_seconds,
-        )
+        options.validate()
 
-        metadata_args: list[str] = []
-        for field, value in metadata.items():
-            metadata_args += ["-metadata", f"{field}={value}"]
+        source = Path(options.src).resolve()
+        if not source.is_file():
+            raise MarkError(f"输入文件不存在：{source}")
 
-        _run_ffmpeg(
-            [
-                "-i",
-                str(source),
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a?",
-                "-vf",
-                filter_text,
-                "-c:v",
-                "libx264",
-                "-crf",
-                "18",
-                "-preset",
-                "veryfast",
-                "-pix_fmt",
-                "yuv420p",
-                *_audio_args(probe),
-                "-movflags",
-                "+faststart+use_metadata_tags",
-                *metadata_args,
-                str(video_path),
-            ],
-            what="烧标识",
-        )
+        out_dir = Path(options.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        generated_at = options.generated_at or datetime.now().astimezone()
+        content_id = options.content_id or new_content_id()
 
-        label_frame = out_dir / "label_frame.png"
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_path),
-                "-ss",
-                f"{min(1.0, options.label_seconds / 2):.3f}",
-                "-frames:v",
-                "1",
-                str(label_frame),
-            ],
-            what="抽取标识证物帧",
-        )
+        probe = probe_media(source)
+        duration_s = probe.duration_s
+        notes: list[str] = []
+        if duration_s is not None and duration_s < options.label_seconds + 1:
+            notes.append(
+                f"输入只有 {duration_s:.2f} 秒，短于标识时长 + 1 秒，核验点已按片长裁剪"
+            )
 
-        verification = verifier(
+        return cls(
+            options=options,
             source=source,
-            output=video_path,
-            expected_metadata=metadata,
-            label_seconds=options.label_seconds,
+            out_dir=out_dir,
+            video_path=out_dir / "marked.mp4",
+            report_path=out_dir / "mark.json",
+            generated_at=generated_at,
+            content_id=content_id,
+            probe=probe,
+            duration_s=duration_s,
+            notes=notes,
+            metadata=build_metadata(options, content_id),
         )
-        verified = bool(verification["metadata_roundtrip"]["ok"]) and bool(
-            verification["explicit_label"]["ok"]
-        )
-        status = "marked" if verified else "verify_failed"
-        if not verified:
-            notes.append("自动核验未通过：请检查标识是否真的烧上、元数据是否写进容器")
 
-    output_info = _format_info(video_path)
-    output_size, output_sha = file_digest(video_path)
+
+def _mark_self_use(session: _MarkSession) -> None:
+    """自用模式：只转封装保证可播，不烧标识；落一份免责声明并跳过核验。"""
+
+    _run_ffmpeg(
+        [
+            "-i",
+            str(session.source),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(session.video_path),
+        ],
+        what="自用模式转封装",
+    )
+    notice = {
+        "schema_version": 1,
+        "tool": "submatrix",
+        "command": "mark",
+        "mode": "self_use",
+        "generated_at": session.generated_at.isoformat(),
+        "notice": SELF_USE_NOTICE,
+        "input": {
+            "path": str(session.source),
+            "bytes": session.source.stat().st_size,
+            "sha256": file_digest(session.source)[1],
+        },
+        "output": {"path": str(session.video_path.resolve())},
+    }
+    (session.out_dir / "self_use_notice.json").write_text(
+        json.dumps(notice, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
+    )
+    session.status = "self_use"
+    session.verification = {
+        "metadata_roundtrip": {"ok": True, "skipped": True, "fields": {}, "missing": []},
+        "explicit_label": {"ok": True, "skipped": True, "samples": [], "threshold": 0.0},
+    }
+    session.metadata = {}
+
+
+def _mark_labeled(
+    session: _MarkSession,
+    *,
+    verifier: Callable[..., dict[str, object]],
+) -> None:
+    """正常模式：烧显式标识 + 写隐式元数据，抽一张证物帧并回读核验。"""
+
+    options = session.options
+    session.font = resolve_font(options.font_file)
+    width, height = _video_size(session.probe)
+    session.geometry = label_geometry(width, height, options.position)
+
+    label_file = session.out_dir / "label.txt"
+    label_file.write_text(options.label_text, encoding="utf-8", newline="\n")
+    filter_text = build_drawtext(
+        textfile=label_file.resolve(),
+        font_file=session.font,
+        geometry=session.geometry,
+        seconds=options.label_seconds,
+    )
+
+    metadata_args: list[str] = []
+    for key, value in session.metadata.items():
+        metadata_args += ["-metadata", f"{key}={value}"]
+
+    _run_ffmpeg(
+        [
+            "-i",
+            str(session.source),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-vf",
+            filter_text,
+            "-c:v",
+            "libx264",
+            "-crf",
+            "18",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            *_audio_args(session.probe),
+            "-movflags",
+            "+faststart+use_metadata_tags",
+            *metadata_args,
+            str(session.video_path),
+        ],
+        what="烧标识",
+    )
+
+    session.label_frame = session.out_dir / "label_frame.png"
+    _run_ffmpeg(
+        [
+            "-i",
+            str(session.video_path),
+            "-ss",
+            f"{min(1.0, options.label_seconds / 2):.3f}",
+            "-frames:v",
+            "1",
+            str(session.label_frame),
+        ],
+        what="抽取标识证物帧",
+    )
+
+    session.verification = verifier(
+        source=session.source,
+        output=session.video_path,
+        expected_metadata=session.metadata,
+        label_seconds=options.label_seconds,
+    )
+    verified = bool(session.verification["metadata_roundtrip"]["ok"]) and bool(
+        session.verification["explicit_label"]["ok"]
+    )
+    session.status = "marked" if verified else "verify_failed"
+    if not verified:
+        session.notes.append("自动核验未通过：请检查标识是否真的烧上、元数据是否写进容器")
+
+
+def _write_outputs(session: _MarkSession) -> MarkResult:
+    """写 ``mark.json`` 并返回命令行契约（核验不过 → 退出码 2）。"""
+
+    options = session.options
+    output_info = _format_info(session.video_path)
+    output_size, output_sha = file_digest(session.video_path)
     report: dict[str, object] = {
         "schema_version": 1,
         "tool": "submatrix",
         "version": __version__,
         "command": "mark",
-        "generated_at": generated_at.isoformat(),
-        "status": status,
+        "generated_at": session.generated_at.isoformat(),
+        "status": session.status,
         "input": {
-            "path": str(source),
-            "bytes": source.stat().st_size,
-            "sha256": file_digest(source)[1],
-            "duration_s": duration_s,
-            "format_name": probe.format_name,
+            "path": str(session.source),
+            "bytes": session.source.stat().st_size,
+            "sha256": file_digest(session.source)[1],
+            "duration_s": session.duration_s,
+            "format_name": session.probe.format_name,
         },
         "config": {
             "label_text": options.label_text,
             "label_seconds": options.label_seconds,
             "position": options.position,
-            "font_file": str(font) if font is not None else None,
-            "font_size": geometry.font_size if geometry is not None else None,
+            "font_file": str(session.font) if session.font is not None else None,
+            "font_size": session.geometry.font_size if session.geometry is not None else None,
             "provider": options.provider,
             "self_use": options.self_use,
         },
-        "metadata": metadata,
+        "metadata": session.metadata,
         "output": {
-            "path": str(video_path.resolve()),
+            "path": str(session.video_path.resolve()),
             "bytes": output_size,
             "sha256": output_sha,
             "duration_s": float(output_info["duration"]) if output_info.get("duration") else None,
         },
-        "verification": verification,
-        "label_frame": str(label_frame) if label_frame is not None else None,
-        "notes": notes,
+        "verification": session.verification,
+        "label_frame": str(session.label_frame) if session.label_frame is not None else None,
+        "notes": session.notes,
     }
-    report_path.write_text(
+    session.report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
 
     return MarkResult(
-        status=status,
-        exit_code=0 if status in {"marked", "self_use"} else 2,
+        status=session.status,
+        exit_code=0 if session.status in {"marked", "self_use"} else 2,
         report=report,
-        report_path=report_path.resolve(),
-        video_path=video_path.resolve(),
-        label_frame=label_frame.resolve() if label_frame is not None else None,
+        report_path=session.report_path.resolve(),
+        video_path=session.video_path.resolve(),
+        label_frame=(
+            session.label_frame.resolve() if session.label_frame is not None else None
+        ),
     )
