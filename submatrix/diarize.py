@@ -28,7 +28,7 @@ import subprocess
 import sys
 import time
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
@@ -946,60 +946,142 @@ def attach_speakers(
 
 
 def run_diarize(options: DiarizeOptions) -> DiarizeResult:
-    options.validate()
-    source = Path(options.src)
-    if not source.is_file():
-        raise DiarizeError(f"输入文件不存在：{source}")
-    if options.srt is not None and not Path(options.srt).is_file():
-        raise DiarizeError(f"字幕文件不存在：{Path(options.srt)}")
+    """把音频/视频分出说话人分段；给了字幕就顺带做"字幕条 → 说话人"归属。
 
-    run = options.runner or _default_runner
-    python = find_diarization_python(options.python, runner=run)
-    segmentation, embedding = find_models(
-        segmentation=options.segmentation_model,
-        embedding=options.embedding_model,
-        language=options.language,
-    )
-    threshold = options.resolved_threshold
+    五个阶段各自独立可读：准备 → 跑 worker → 归簇 → 收告警 → 归属与落盘。
+    阶段之间只通过 :class:`_DiarizeSession` 交接。
+    """
 
-    # OPT-6：VAD 预过滤。显式给了 --vad-model 就必须存在（否则报错）；
-    # 只是默认开启但本机没装模型时安静跳过，报告里写清 skipped 原因。
-    vad_path: Path | None = None
-    vad_skipped: str | None = None
-    if options.vad_model is not None:
-        vad_path = find_vad_model(options.vad_model)
-    elif options.vad:
-        vad_path = find_vad_model(None)
-        if vad_path is None:
-            vad_skipped = "model-missing"
-    effective_alpha = options.merge_alpha_for(vad_path is not None)
+    session = _DiarizeSession.start(options)
+    _run_worker(session)
+    _cluster_turns(session)
+    _collect_warnings(session)
+    _assign_speakers(session)
+    return _write_outputs(session)
 
-    out_dir = Path(options.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    audio_path = out_dir / "source.wav"
-    raw_path = out_dir / "diarization-worker.json"
 
-    started = time.monotonic()
-    extractor = options.extractor or _extract_audio
-    extractor(source, audio_path)
-    duration_ms = _wav_duration_ms(audio_path)
+@dataclass(slots=True)
+class _DiarizeSession:
+    """一次说话人分离的现场：环境、worker 结果、逐阶段结论。
 
-    worker = Path(__file__).with_name("diarize_worker.py")
+    以前这些全是 327 行 ``run_diarize`` 的局部变量 —— 从"找解释器"到"写
+    speakers.json"共用同一个命名空间，改告警措辞要先分清哪些变量是过程、哪些只是
+    报告字段。收成记录之后，每个阶段只读写自己那几个字段。
+    """
+
+    options: DiarizeOptions
+    source: Path
+    srt: Path | None
+    run: Runner
+    python: str
+    segmentation: Path
+    embedding: Path
+    threshold: float
+    vad_path: Path | None
+    vad_skipped: str | None
+    effective_alpha: float
+    out_dir: Path
+    audio_path: Path
+    raw_path: Path
+    started: float
+    duration_ms: int
+    payload: dict[str, object] = field(default_factory=dict)
+    turns: list[SpeakerTurn] = field(default_factory=list)
+    vad_summary: dict[str, object] | None = None
+    clustering_summary: dict[str, object] | None = None
+    clusters: ClusterMerge | None = None
+    speakers: list[str] = field(default_factory=list)
+    wall: float = 0.0
+    warnings: list[str] = field(default_factory=list)
+    status: str = "ok"
+    assignments: list[str] = field(default_factory=list)
+    texts: list[str] = field(default_factory=list)
+    cues_payload: list[dict[str, object]] | None = None
+    speakers_path: Path | None = None
+    outputs: list[OutputFile] = field(default_factory=list)
+
+    @classmethod
+    def start(cls, options: DiarizeOptions) -> "_DiarizeSession":
+        """校验参数、定位解释器与模型、抽音频 —— 开工前的一次性准备。"""
+
+        options.validate()
+        source = Path(options.src)
+        if not source.is_file():
+            raise DiarizeError(f"输入文件不存在：{source}")
+        srt = Path(options.srt) if options.srt is not None else None
+        if srt is not None and not srt.is_file():
+            raise DiarizeError(f"字幕文件不存在：{srt}")
+
+        run = options.runner or _default_runner
+        python = find_diarization_python(options.python, runner=run)
+        segmentation, embedding = find_models(
+            segmentation=options.segmentation_model,
+            embedding=options.embedding_model,
+            language=options.language,
+        )
+        threshold = options.resolved_threshold
+
+        # OPT-6：VAD 预过滤。显式给了 --vad-model 就必须存在（否则报错）；
+        # 只是默认开启但本机没装模型时安静跳过，报告里写清 skipped 原因。
+        vad_path: Path | None = None
+        vad_skipped: str | None = None
+        if options.vad_model is not None:
+            vad_path = find_vad_model(options.vad_model)
+        elif options.vad:
+            vad_path = find_vad_model(None)
+            if vad_path is None:
+                vad_skipped = "model-missing"
+        effective_alpha = options.merge_alpha_for(vad_path is not None)
+
+        out_dir = Path(options.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        audio_path = out_dir / "source.wav"
+        raw_path = out_dir / "diarization-worker.json"
+
+        started = time.monotonic()
+        extractor = options.extractor or _extract_audio
+        extractor(source, audio_path)
+        duration_ms = _wav_duration_ms(audio_path)
+
+        return cls(
+            options=options,
+            source=source,
+            srt=srt,
+            run=run,
+            python=python,
+            segmentation=segmentation,
+            embedding=embedding,
+            threshold=threshold,
+            vad_path=vad_path,
+            vad_skipped=vad_skipped,
+            effective_alpha=effective_alpha,
+            out_dir=out_dir,
+            audio_path=audio_path,
+            raw_path=raw_path,
+            started=started,
+            duration_ms=duration_ms,
+        )
+
+
+def _worker_command(session: _DiarizeSession) -> list[str]:
+    """派给 worker 的完整命令行（参数口径就是 diarize_worker 的 CLI 契约）。"""
+
+    options = session.options
     command = [
-        python,
-        str(worker),
+        session.python,
+        str(Path(__file__).with_name("diarize_worker.py")),
         "--audio",
-        str(audio_path),
+        str(session.audio_path),
         "--segmentation",
-        str(segmentation),
+        str(session.segmentation),
         "--embedding",
-        str(embedding),
+        str(session.embedding),
         "--output",
-        str(raw_path),
+        str(session.raw_path),
         "--num-speakers",
         str(options.num_speakers if options.num_speakers > 0 else -1),
         "--threshold",
-        f"{threshold:g}",
+        f"{session.threshold:g}",
         "--min-duration-on",
         f"{options.min_duration_on:g}",
         "--min-duration-off",
@@ -1007,11 +1089,11 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
         "--num-threads",
         str(_resolve_threads(options.num_threads)),
     ]
-    if vad_path is not None:
+    if session.vad_path is not None:
         command.extend(
             [
                 "--vad-model",
-                str(vad_path),
+                str(session.vad_path),
                 "--vad-threshold",
                 f"{options.vad_threshold:g}",
                 "--vad-min-silence",
@@ -1027,141 +1109,177 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
             "--clustering",
             options.resolved_clustering,
             "--merge-alpha",
-            f"{effective_alpha:g}",
+            f"{session.effective_alpha:g}",
             "--merge-min-speech",
             f"{options.min_speaker_speech_s:g}",
             "--merge-min-share",
             f"{options.min_speaker_share:g}",
         ]
     )
-    payload = run_once(
-        command,
-        raw_path,
+    return command
+
+
+def _run_worker(session: _DiarizeSession) -> None:
+    """跑一次 worker（独立解释器 + 子进程），拿回原始分段与两段诊断摘要。"""
+
+    session.payload = run_once(
+        _worker_command(session),
+        session.raw_path,
         error_cls=DiarizeError,
-        runner=run,
+        runner=session.run,
         label="说话人分离",
     )
 
-    turns, _id_map = _normalize_turns(payload.get("segments") or [])
-    raw_vad = payload.get("vad")
-    vad_summary = dict(raw_vad) if isinstance(raw_vad, dict) else None
-    raw_clustering = payload.get("clustering")
-    clustering_summary = dict(raw_clustering) if isinstance(raw_clustering, dict) else None
-    # 聚类碎片清理：短簇（<3s 或 <1%）并入相邻主簇，避免"15 人"式的假人数
-    clusters = merge_minor_speakers(
+
+def _cluster_turns(session: _DiarizeSession) -> None:
+    """把 worker 的整数说话人归一，再把短簇并回主簇（避免"15 人"式假人数）。"""
+
+    options = session.options
+    turns, _id_map = _normalize_turns(session.payload.get("segments") or [])
+    raw_vad = session.payload.get("vad")
+    session.vad_summary = dict(raw_vad) if isinstance(raw_vad, dict) else None
+    raw_clustering = session.payload.get("clustering")
+    session.clustering_summary = (
+        dict(raw_clustering) if isinstance(raw_clustering, dict) else None
+    )
+    # 聚类碎片清理：短簇（<3s 或 <1%）并入相邻主簇
+    session.clusters = merge_minor_speakers(
         turns,
         min_speech_s=options.min_speaker_speech_s,
         min_share=options.min_speaker_share,
     )
-    turns = list(clusters.turns)
-    speakers = _speaker_order(turns)
-    wall = time.monotonic() - started
+    session.turns = list(session.clusters.turns)
+    session.speakers = _speaker_order(session.turns)
+    session.wall = time.monotonic() - session.started
 
-    warnings: list[str] = []
-    if clustering_summary is not None:
-        merged_in = clustering_summary.get("clusters_in")
-        merged_out = clustering_summary.get("clusters_out")
+
+def _clusters_of(session: _DiarizeSession) -> ClusterMerge:
+    """取聚类结果；没跑过聚类说明内部顺序错了，按不变量违反报出来。"""
+
+    if session.clusters is None:
+        raise DiarizeError("内部错误：聚类结果缺失")
+    return session.clusters
+
+
+def _collect_warnings(session: _DiarizeSession) -> None:
+    """把"这次分离有什么需要用户注意的"汇总成告警，并定 status。"""
+
+    options = session.options
+    clusters = _clusters_of(session)
+
+    if session.clustering_summary is not None:
+        merged_in = session.clustering_summary.get("clusters_in")
+        merged_out = session.clustering_summary.get("clusters_out")
         try:
             if int(merged_in) > int(merged_out):  # type: ignore[arg-type]
-                warnings.append(
+                session.warnings.append(
                     f"按声纹相似度把短簇/同人簇并回主簇：{merged_in} → {merged_out} 人"
-                    f"（阈值 τ={clustering_summary.get('tau')}，"
-                    f"同人相似度参考 {clustering_summary.get('s_same')}）"
+                    f"（阈值 τ={session.clustering_summary.get('tau')}，"
+                    f"同人相似度参考 {session.clustering_summary.get('s_same')}）"
                 )
         except (TypeError, ValueError):
             pass
-    if vad_summary is not None and vad_summary.get("skipped") == "no-speech":
-        warnings.append(
+    if session.vad_summary is not None and session.vad_summary.get("skipped") == "no-speech":
+        session.warnings.append(
             "VAD 没有检测到语音（整段像音乐/静音），已按原音频跑分离，结果为 0 人属正常"
         )
-    if not turns:
-        warnings.append("没有识别出任何说话人分段（可能是纯音乐/静音素材）")
-        status = "empty"
+    if not session.turns:
+        session.warnings.append("没有识别出任何说话人分段（可能是纯音乐/静音素材）")
+        session.status = "empty"
     else:
-        status = "ok"
+        session.status = "ok"
     if clusters.merged:
         detail = "、".join(
             f"{item['speaker']}({item['speech_s']}s)→{item['into']}" for item in clusters.merged
         )
-        warnings.append(
+        session.warnings.append(
             f"已把 {len(clusters.merged)} 个短簇（语音 <{options.min_speaker_speech_s:g}s "
             f"或占比 <{options.min_speaker_share * 100:g}%）并入相邻主簇："
             f"{len(clusters.speakers_before)} 人 → {len(clusters.speakers_after)} 人（{detail}）"
         )
     elif clusters.skipped == "single-main":
-        warnings.append(
+        session.warnings.append(
             f"有 {len(clusters.speakers_before)} 个簇但只有 1 个达到主簇门槛；"
             "合并会只剩 1 个说话人，已按「宁多不并」保留原结果（可用 --speakers 显式指定人数）"
         )
-    if len(speakers) == 1:
-        warnings.append("只识别出 1 个说话人（单人口播素材）：多音色配音不会生效")
-    if options.num_speakers and len(speakers) != options.num_speakers:
-        warnings.append(
-            f"指定了 {options.num_speakers} 个说话人，实际分离出 {len(speakers)} 个"
+    if len(session.speakers) == 1:
+        session.warnings.append("只识别出 1 个说话人（单人口播素材）：多音色配音不会生效")
+    if options.num_speakers and len(session.speakers) != options.num_speakers:
+        session.warnings.append(
+            f"指定了 {options.num_speakers} 个说话人，实际分离出 {len(session.speakers)} 个"
             "（素材本身人数不符或阈值不合适）"
         )
-    if len(speakers) > MAX_SPEAKERS:
-        warnings.append(f"分离出 {len(speakers)} 个说话人，超过工程上限 {MAX_SPEAKERS}，建议指定 --speakers")
+    if len(session.speakers) > MAX_SPEAKERS:
+        session.warnings.append(
+            f"分离出 {len(session.speakers)} 个说话人，超过工程上限 {MAX_SPEAKERS}，"
+            "建议指定 --speakers"
+        )
 
-    outputs: list[OutputFile] = []
-    cues_payload: list[dict[str, object]] | None = None
-    speakers_path: Path | None = None
-    assignments: list[str] = []
-    texts: list[str] = []
-    if options.srt is not None:
-        subtitle, _encoding = load_srt(Path(options.srt))
-        timings = [(cue.timing.start_ms, cue.timing.end_ms) for cue in subtitle.cues]
-        texts = [cue.text for cue in subtitle.cues]
-        assignments = smooth_speakers(assign_speakers(timings, turns), timings)
-        missed = sum(1 for speaker in assignments if not speaker)
-        if missed:
-            warnings.append(f"有 {missed} 条字幕没有可归属的说话人分段（已按空值兜底）")
-        cues_payload = [
+
+def _assign_speakers(session: _DiarizeSession) -> None:
+    """把每条字幕归到说话人（按时间重叠 + 平滑），写 ``speakers.json``。"""
+
+    if session.srt is None:
+        return
+    subtitle, _encoding = load_srt(session.srt)
+    timings = [(cue.timing.start_ms, cue.timing.end_ms) for cue in subtitle.cues]
+    session.texts = [cue.text for cue in subtitle.cues]
+    session.assignments = smooth_speakers(assign_speakers(timings, session.turns), timings)
+    missed = sum(1 for speaker in session.assignments if not speaker)
+    if missed:
+        session.warnings.append(f"有 {missed} 条字幕没有可归属的说话人分段（已按空值兜底）")
+    session.cues_payload = [
+        {
+            "cue": index,
+            "start_ms": timing[0],
+            "end_ms": timing[1],
+            "speaker": speaker,
+        }
+        for index, (timing, speaker) in enumerate(zip(timings, session.assignments), start=1)
+    ]
+    session.speakers_path = session.out_dir / "speakers.json"
+    session.speakers_path.write_text(
+        json.dumps(
             {
-                "cue": index,
-                "start_ms": timing[0],
-                "end_ms": timing[1],
-                "speaker": speaker,
-            }
-            for index, (timing, speaker) in enumerate(zip(timings, assignments), start=1)
-        ]
-        speakers_path = out_dir / "speakers.json"
-        speakers_path.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "tool": "submatrix",
-                    "version": __version__,
-                    "srt": str(Path(options.srt).resolve()),
-                    "speakers": speakers,
-                    "cues": cues_payload,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-            newline="\n",
+                "schema_version": 1,
+                "tool": "submatrix",
+                "version": __version__,
+                "srt": str(session.srt.resolve()),
+                "speakers": session.speakers,
+                "cues": session.cues_payload,
+            },
+            ensure_ascii=False,
+            indent=2,
         )
-        outputs.append(
-            OutputFile(
-                kind="speaker_assignments",
-                path=speakers_path.resolve(),
-                cues=len(cues_payload),
-                size=speakers_path.stat().st_size,
-            )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    session.outputs.append(
+        OutputFile(
+            kind="speaker_assignments",
+            path=session.speakers_path.resolve(),
+            cues=len(session.cues_payload),
+            size=session.speakers_path.stat().st_size,
         )
+    )
 
-    speech_ms = sum(turn.duration_ms for turn in turns)
-    source_size, source_sha = file_digest(source)
+
+def _write_outputs(session: _DiarizeSession) -> DiarizeResult:
+    """写 ``diarize.json`` 与 ``segments.json``，清掉中间产物，返回命令行契约。"""
+
+    options = session.options
+    clusters = _clusters_of(session)
+    speech_ms = sum(turn.duration_ms for turn in session.turns)
+    source_size, source_sha = file_digest(session.source)
     input_srt: dict[str, object] | None = None
-    if options.srt is not None:
-        srt_size, srt_sha = file_digest(Path(options.srt))
+    if session.srt is not None:
+        srt_size, srt_sha = file_digest(session.srt)
         input_srt = {
-            "path": str(Path(options.srt).resolve()),
+            "path": str(session.srt.resolve()),
             "bytes": srt_size,
             "sha256": srt_sha,
-            "cues": len(assignments),
+            "cues": len(session.assignments),
         }
 
     generated_at = options.generated_at or datetime.now().astimezone()
@@ -1171,22 +1289,24 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
         "version": __version__,
         "command": "diarize",
         "generated_at": generated_at.isoformat(),
-        "status": status,
+        "status": session.status,
         "input": {
-            "path": str(source.resolve()),
+            "path": str(session.source.resolve()),
             "bytes": source_size,
             "sha256": source_sha,
-            "duration_s": round(duration_ms / 1000, 2),
+            "duration_s": round(session.duration_ms / 1000, 2),
             "srt": input_srt,
         },
         "config": {
-            "python": python,
-            "segmentation_model": str(segmentation.resolve()),
-            "embedding_model": str(embedding.resolve()),
+            "python": session.python,
+            "segmentation_model": str(session.segmentation.resolve()),
+            "embedding_model": str(session.embedding.resolve()),
             "language": options.language,
             "num_speakers_requested": options.num_speakers or None,
-            "threshold": threshold,
-            "threshold_source": "explicit" if options.threshold is not None else "language-default",
+            "threshold": session.threshold,
+            "threshold_source": (
+                "explicit" if options.threshold is not None else "language-default"
+            ),
             "min_speaker_speech_s": options.min_speaker_speech_s,
             "min_speaker_share": options.min_speaker_share,
             "min_duration_on": options.min_duration_on,
@@ -1196,47 +1316,56 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
             # VAD 预过滤（OPT-6）：requested 是用户意图，enabled 是实际是否用了模型
             "vad": {
                 "requested": bool(options.vad or options.vad_model is not None),
-                "enabled": vad_path is not None,
-                "model": str(vad_path.resolve()) if vad_path is not None else None,
+                "enabled": session.vad_path is not None,
+                "model": str(session.vad_path.resolve()) if session.vad_path is not None else None,
                 "threshold": options.vad_threshold,
-                "skipped": vad_skipped,
+                "skipped": session.vad_skipped,
                 # compact = 只把语音段拼起来送模型，再把时间轴映射回原视频
-                "mode": "compact" if vad_path is not None else None,
+                "mode": "compact" if session.vad_path is not None else None,
             },
             # 二次聚类（OPT-7）
             "clustering": options.clustering,
             "clustering_effective": options.resolved_clustering,
-            "merge_alpha": effective_alpha,
+            "merge_alpha": session.effective_alpha,
             "merge_alpha_source": (
-                "explicit" if options.merge_alpha is not None
-                else ("vad-default" if vad_path is not None else "default")
+                "explicit"
+                if options.merge_alpha is not None
+                else ("vad-default" if session.vad_path is not None else "default")
             ),
         },
         "summary": {
-            "speakers": len(speakers),
+            "speakers": len(session.speakers),
             "speakers_raw": len(clusters.speakers_before),
             "merged_clusters": list(clusters.merged),
             "cluster_merge_skipped": clusters.skipped,
-            "vad": vad_summary,
-            "clustering": clustering_summary,
-            "turns": len(turns),
+            "vad": session.vad_summary,
+            "clustering": session.clustering_summary,
+            "turns": len(session.turns),
             "speech_s": round(speech_ms / 1000, 2),
-            "coverage_pct": round(speech_ms / duration_ms * 100, 1) if duration_ms else 0.0,
-            "cues": len(assignments) if options.srt is not None else None,
-            "assigned_cues": sum(1 for speaker in assignments if speaker) if options.srt is not None else None,
-            "speaker_stats": _speaker_stats(turns, assignments, texts),
-            "rtf": round(duration_ms / 1000 / wall, 3) if wall > 0 else None,
-            "wall_s": round(wall, 1),
+            "coverage_pct": (
+                round(speech_ms / session.duration_ms * 100, 1) if session.duration_ms else 0.0
+            ),
+            "cues": len(session.assignments) if session.srt is not None else None,
+            "assigned_cues": (
+                sum(1 for speaker in session.assignments if speaker)
+                if session.srt is not None
+                else None
+            ),
+            "speaker_stats": _speaker_stats(session.turns, session.assignments, session.texts),
+            "rtf": (
+                round(session.duration_ms / 1000 / session.wall, 3) if session.wall > 0 else None
+            ),
+            "wall_s": round(session.wall, 1),
         },
         "segments": [
             {"start_ms": turn.start_ms, "end_ms": turn.end_ms, "speaker": turn.speaker}
-            for turn in turns
+            for turn in session.turns
         ],
-        "cues": cues_payload,
-        "outputs": [output.to_dict() for output in outputs],
-        "warnings": warnings,
+        "cues": session.cues_payload,
+        "outputs": [output.to_dict() for output in session.outputs],
+        "warnings": session.warnings,
     }
-    report_path = out_dir / "diarize.json"
+    report_path = session.out_dir / "diarize.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
@@ -1244,10 +1373,10 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
     # 也方便下次换字幕/重跑 ASR 时复用分段（分段只跟音频和聚类参数有关）。
     summary_block = section(report, "summary")
     write_segments(
-        out_dir / SEGMENTS_NAME,
-        turns=turns,
-        source_path=source,
-        duration_s=duration_ms / 1000,
+        session.out_dir / SEGMENTS_NAME,
+        turns=session.turns,
+        source_path=session.source,
+        duration_s=session.duration_ms / 1000,
         config=section(report, "config"),
         summary={
             "speakers": summary_block.get("speakers"),
@@ -1260,17 +1389,16 @@ def run_diarize(options: DiarizeOptions) -> DiarizeResult:
             "rtf": summary_block.get("rtf"),
             "wall_s": summary_block.get("wall_s"),
         },
-        warnings=warnings,
+        warnings=session.warnings,
     )
     if not options.keep_raw:
-        raw_path.unlink(missing_ok=True)
+        session.raw_path.unlink(missing_ok=True)
 
     return DiarizeResult(
-        status=status,
-        exit_code=EXIT_OK if status == "ok" else EXIT_INVALID,
+        status=session.status,
+        exit_code=EXIT_OK if session.status == "ok" else EXIT_INVALID,
         report=report,
         report_path=report_path.resolve(),
-        speakers_path=speakers_path.resolve() if speakers_path is not None else None,
-        segments=tuple(turns),
+        speakers_path=session.speakers_path.resolve() if session.speakers_path is not None else None,
+        segments=tuple(session.turns),
     )
-

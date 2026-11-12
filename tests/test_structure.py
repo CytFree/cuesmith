@@ -112,7 +112,6 @@ LENGTH_OVERRIDES = {
     "dub:_build_report": "报告字典字面量",
     "cli:_add_pipeline_args": "参数表",
     # 欠债待拆
-    "diarize:run_diarize": "待拆：_DiarizeSession + 阶段函数",
     "mark:run_mark": "待拆",
     "burn:run_burn": "待拆",
     "asr:run_asr": "待拆",
