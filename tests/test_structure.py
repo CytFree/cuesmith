@@ -118,11 +118,11 @@ LENGTH_OVERRIDES = {
 MAX_LINES = 150
 
 # 规范 §3：报告 JSON 的 union-attr 欠债。治一处就下调一处，不许只增长。
-# 基线从 57 降到 12：``report.section()`` 把"取报告里的一段"收成一处之后，pipeline /
+# 基线从 57 → 12 → 0：``report.section()`` 把"取报告里的一段"收成一处之后，pipeline /
 # diarize 的 41 处按行抑制全部删掉（含 31 处同一根因的 union-attr）。
 # 剩下 12 处是别的原因（动态 JSON 的 int()/float() 收窄、gui 表单装箱、cost 深合并），
 # 各有自己的修法，别混进同一次改动里。
-TYPE_IGNORE_BUDGET = 12
+TYPE_IGNORE_BUDGET = 0
 
 
 # ---------------------------------------------------------------- 工具

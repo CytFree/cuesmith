@@ -271,9 +271,11 @@ def write_wav(
 
 
 def _clamp_speed(raw: object) -> float:
+    if not isinstance(raw, (int, float, str)):
+        return 1.0
     try:
-        speed = float(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+        speed = float(raw)
+    except ValueError:
         return 1.0
     if speed != speed:  # NaN
         return 1.0

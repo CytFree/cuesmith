@@ -442,9 +442,9 @@ def speaker_rows(out_dir: str | Path) -> list[list[str]]:
     rows: list[list[str]] = []
     for speaker, voice in sorted(voices.items()):
         cues = counts.get(str(speaker))
-        rows.append(
-            [str(speaker), str(voice), "" if cues is None else str(int(cues))]  # type: ignore[arg-type]
-        )
+        # cues 来自 JSON：可能是 None 或数字；其它形状按空串处理（表格里显示为空）
+        cue_text = str(int(cues)) if isinstance(cues, (int, float, str)) else ""
+        rows.append([str(speaker), str(voice), cue_text])
     return rows
 
 
@@ -476,15 +476,21 @@ def _stage_statuses(out_dir: str | Path) -> dict[str, str] | None:
 
 def _diarize_speakers(out_dir: str | Path) -> int | None:
     summary = _stage_summary(out_dir, "diarize")
+    value = summary.get("speakers")
+    if not isinstance(value, (int, float, str)):
+        return None
     try:
-        return int(summary.get("speakers"))  # type: ignore[arg-type]
+        return int(value)
     except (TypeError, ValueError):
         return None
 
 
 def _report_wall(out_dir: str | Path) -> float | None:
+    value = _read_json(Path(out_dir) / "pipeline.json").get("wall_s")
+    if not isinstance(value, (int, float, str)):
+        return None
     try:
-        return float(_read_json(Path(out_dir) / "pipeline.json").get("wall_s"))  # type: ignore[arg-type]
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -594,10 +600,9 @@ def _table_rows(rows: object) -> list[list[str]]:
             rows = values.tolist()
         except (AttributeError, TypeError, ValueError):
             return []
-    try:
-        candidates = list(rows)  # type: ignore[arg-type]
-    except TypeError:
+    if not isinstance(rows, Iterable):
         return []
+    candidates = list(rows)
     table: list[list[str]] = []
     for row in candidates:
         if not isinstance(row, (list, tuple)):

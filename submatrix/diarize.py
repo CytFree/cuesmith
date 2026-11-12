@@ -225,6 +225,14 @@ class DiarizeResult:
     segments: tuple[SpeakerTurn, ...]
 
 
+def _as_int(value: object) -> int:
+    """把 JSON 里的数字收窄成 int（非数字抛 TypeError，交给调用方的 except 处理）。"""
+
+    if isinstance(value, (int, float, str)):
+        return int(value)
+    raise TypeError(f"不是数字：{value!r}")
+
+
 # ---------------------------------------------------------------------- 环境
 
 
@@ -1171,7 +1179,7 @@ def _collect_warnings(session: _DiarizeSession) -> None:
         merged_in = session.clustering_summary.get("clusters_in")
         merged_out = session.clustering_summary.get("clusters_out")
         try:
-            if int(merged_in) > int(merged_out):  # type: ignore[arg-type]
+            if _as_int(merged_in) > _as_int(merged_out):
                 session.warnings.append(
                     f"按声纹相似度把短簇/同人簇并回主簇：{merged_in} → {merged_out} 人"
                     f"（阈值 τ={session.clustering_summary.get('tau')}，"

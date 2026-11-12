@@ -79,8 +79,9 @@ def _deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[st
         key: (dict(value) if isinstance(value, Mapping) else value) for key, value in base.items()
     }
     for key, value in override.items():
-        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
-            merged[key] = _deep_merge(merged[key], value)  # type: ignore[arg-type]
+        existing = merged.get(key)
+        if isinstance(value, Mapping) and isinstance(existing, Mapping):
+            merged[key] = _deep_merge(existing, value)
         else:
             merged[key] = value
     return merged
@@ -248,7 +249,8 @@ def price_quantities(quantities: Mapping[str, Any], pricing: Mapping[str, Any]) 
     if provider == "openai":
         model = llm.get("model")
         rule = _match_rule(
-            pricing.get("llm") or {}, [model, llm.get("base_url"), provider]  # type: ignore[arg-type]
+            _table(pricing, "llm"),
+            [model if isinstance(model, str) else None, llm.get("base_url"), provider],
         )
         rate_in, currency = _rate(rule, "input_per_million")
         rate_out, _ = _rate(rule, "output_per_million")
@@ -291,7 +293,7 @@ def price_quantities(quantities: Mapping[str, Any], pricing: Mapping[str, Any]) 
     chars = int(tts.get("chars") or 0)
     if chars:
         rule = _match_rule(
-            pricing.get("tts") or {}, [tts_provider or None, tts.get("engine")]  # type: ignore[arg-type]
+            _table(pricing, "tts"), [tts_provider or None, tts.get("engine")]
         )
         rate, currency = _rate(rule, "per_10k_chars")
         _add_item(
@@ -548,3 +550,10 @@ def render_cost(cost: Mapping[str, Any]) -> str:
     for note in cost.get("notes") or []:
         lines.append(f"  - {note}")
     return "\n".join(lines)
+
+
+def _table(source: Mapping[str, object], key: str) -> Mapping[str, object]:
+    """取价表里的一段（不是映射就当作空表）：``pricing.get("llm") or {}`` 的收窄版。"""
+
+    value = source.get(key)
+    return value if isinstance(value, Mapping) else {}

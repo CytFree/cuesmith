@@ -37,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterable, Protocol, Sequence
+from typing import Callable, Iterable, Protocol, Sequence, cast
 
 from . import __version__
 from .clean import is_degenerate_text
@@ -174,6 +174,19 @@ class LlmConfig:
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
+
+
+def _llm_content(data: object) -> object:
+    """从 OpenAI 兼容响应里取 ``choices[0].message.content``。
+
+    形状不对时保持原来的行为（抛 KeyError/TypeError/IndexError，由上层重试/回退），
+    这里只负责把嵌套的 ``object`` 收窄成可索引的类型。
+    """
+
+    payload = cast("dict[str, object]", data)
+    choices = cast("list[dict[str, object]]", payload["choices"])
+    message = cast("dict[str, object]", choices[0]["message"])
+    return message["content"]
 
 
 # ---------------------------------------------------------------------- 渠道
@@ -543,7 +556,7 @@ class OpenAITranslator:
         for attempt in range(self._retries + 1):
             try:
                 data = self._transport(url, payload, headers, self._config.timeout_s)
-                content = str(data["choices"][0]["message"]["content"])  # type: ignore[index]
+                content = str(_llm_content(data))
                 usage = data.get("usage") if isinstance(data, dict) else None
                 self.usage["calls"] += 1
                 if isinstance(usage, dict):
@@ -820,7 +833,7 @@ def _translate_units(
     budgets: Sequence[int] | None = None,
     fallback: Translator | None = None,
     notes: list[str] | None = None,
-    pool: object | None = None,
+    pool: ThreadPoolExecutor | None = None,
 ) -> tuple[list[str], list[Term]]:
     """翻译一组文本（已是最小翻译单位），术语占位保护 + 还原 + LLM 提示。
 
@@ -848,7 +861,7 @@ def _translate_units(
         )
 
     if pool is not None and len(ranges) > 1:
-        chunks = list(pool.map(lambda pair: run(*pair), ranges))  # type: ignore[attr-defined]
+        chunks = list(pool.map(lambda pair: run(*pair), ranges))
     else:
         chunks = [run(start, stop) for start, stop in ranges]
     translated: list[str] = []
@@ -859,10 +872,11 @@ def _translate_units(
     results: list[str] = []
     lost: list[Term] = []
     for index, text in enumerate(translated):
-        if protected is None:
+        if protected is None or glossary is None:
+            # 没有术语表就没有占位符（protected 非空但 glossary 为空是内部矛盾，按无占位符兜底）
             results.append(_flatten(text))
             continue
-        restored, missing = glossary.unprotect(text, protected[index])  # type: ignore[union-attr]
+        restored, missing = glossary.unprotect(text, protected[index])
         results.append(_flatten(restored))
         lost.extend(missing)
     return results, lost
