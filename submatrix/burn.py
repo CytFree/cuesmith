@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -217,58 +217,116 @@ def _region_diff(
 
 
 def run_burn(options: BurnOptions) -> BurnResult:
-    options.validate()
-    video = Path(options.video)
-    subtitle = Path(options.subtitle)
-    if not video.is_file():
-        raise BurnError(f"视频不存在：{video}")
-    if not subtitle.is_file():
-        raise BurnError(f"字幕不存在：{subtitle}")
+    """把外挂字幕烧进画面，并用像素差回读核验"字幕真的上屏了"。
 
-    out_dir = Path(options.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
+    三步：准备（解析字幕、改写位置、探测源片）→ 烧录并探测产物 → 核验与报告。
+    """
 
-    cue_count: int | None = None
-    verify_at_ms: int | None = None
-    encoding = ""
-    if subtitle.suffix.lower() == ".srt":
-        try:
-            parsed, encoding = load_srt(subtitle)
-        except (OSError, ValueError) as exc:
-            raise BurnError(f"字幕读取失败（{subtitle.name}）：{exc}") from exc
-        if len(parsed) == 0:
-            raise BurnError("字幕里没有任何 cue，无法烧录")
-        cue_count = len(parsed)
-        ass_text = dump_ass_single(parsed)
-        if options.verify:
-            target = max(parsed.cues, key=lambda cue: (len(cue.text), cue.timing.duration_ms))
-            verify_at_ms = (target.timing.start_ms + target.timing.end_ms) // 2
-    else:
-        try:
-            ass_text = subtitle.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            raise BurnError(f"字幕读取失败（{subtitle.name}）：{exc}") from exc
-        if options.verify:
-            verify_at_ms = _best_ass_cue_ms(ass_text)
+    session = _BurnSession.start(options)
+    _burn_video(session)
+    _verify_burn(session)
+    return _write_outputs(session)
 
-    # 位置统一在这里改写（.ass 输入也重写一份）：底部居中 / 顶部居中
-    ass_path = out_dir / "subtitles.ass"
-    ass_path.write_text(
-        _apply_position(ass_text, options.position), encoding="utf-8", newline="\n"
-    )
 
-    video_info = _probe(video)
-    input_duration = _duration_ms(video_info)
+@dataclass(slots=True)
+class _BurnSession:
+    """一次烧录的现场：输入探测、产物探测、核验结论与告警。"""
 
-    out_video = out_dir / "burned.mp4"
+    options: BurnOptions
+    video: Path
+    subtitle: Path
+    out_dir: Path
+    started: float
+    ass_path: Path
+    cue_count: int | None
+    verify_at_ms: int | None
+    encoding: str
+    video_info: dict[str, object]
+    input_duration: int
+    out_video: Path
+    output_info: dict[str, object] = field(default_factory=dict)
+    output_duration: int = 0
+    stream_kinds: dict[str, str] = field(default_factory=dict)
+    verification: dict[str, object] | None = None
+    warnings: list[str] = field(default_factory=list)
+    status: str = "ok"
+
+    @classmethod
+    def start(cls, options: BurnOptions) -> "_BurnSession":
+        """校验输入、解析字幕并改写位置、探测源片时长——开工前的一次性准备。"""
+
+        options.validate()
+        video = Path(options.video)
+        subtitle = Path(options.subtitle)
+        if not video.is_file():
+            raise BurnError(f"视频不存在：{video}")
+        if not subtitle.is_file():
+            raise BurnError(f"字幕不存在：{subtitle}")
+
+        out_dir = Path(options.out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
+
+        cue_count: int | None = None
+        verify_at_ms: int | None = None
+        encoding = ""
+        if subtitle.suffix.lower() == ".srt":
+            try:
+                parsed, encoding = load_srt(subtitle)
+            except (OSError, ValueError) as exc:
+                raise BurnError(f"字幕读取失败（{subtitle.name}）：{exc}") from exc
+            if len(parsed) == 0:
+                raise BurnError("字幕里没有任何 cue，无法烧录")
+            cue_count = len(parsed)
+            ass_text = dump_ass_single(parsed)
+            if options.verify:
+                target = max(
+                    parsed.cues, key=lambda cue: (len(cue.text), cue.timing.duration_ms)
+                )
+                verify_at_ms = (target.timing.start_ms + target.timing.end_ms) // 2
+        else:
+            try:
+                ass_text = subtitle.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                raise BurnError(f"字幕读取失败（{subtitle.name}）：{exc}") from exc
+            if options.verify:
+                verify_at_ms = _best_ass_cue_ms(ass_text)
+
+        # 位置统一在这里改写（.ass 输入也重写一份）：底部居中 / 顶部居中
+        ass_path = out_dir / "subtitles.ass"
+        ass_path.write_text(
+            _apply_position(ass_text, options.position), encoding="utf-8", newline="\n"
+        )
+
+        video_info = _probe(video)
+        input_duration = _duration_ms(video_info)
+        return cls(
+            options=options,
+            video=video,
+            subtitle=subtitle,
+            out_dir=out_dir,
+            started=started,
+            ass_path=ass_path,
+            cue_count=cue_count,
+            verify_at_ms=verify_at_ms,
+            encoding=encoding,
+            video_info=video_info,
+            input_duration=input_duration,
+            out_video=out_dir / "burned.mp4",
+        )
+
+
+def _burn_video(session: _BurnSession) -> None:
+    """烧录一次并探测产物（时长/流类型）：这是唯一的重活。"""
+
+    options = session.options
     # 全局参数（-v error -y）由 media.run_ffmpeg 统一前置，这里只给输入/滤镜/编码参数
     media.run_ffmpeg(
         [
             "-i",
-            str(video),
+            str(session.video),
             "-vf",
-            f"ass={_filter_path(ass_path)}",
+            f"ass={_filter_path(session.ass_path)}",
             "-c:v",
             "libx264",
             "-crf",
@@ -281,32 +339,35 @@ def run_burn(options: BurnOptions) -> BurnResult:
             "copy",
             "-movflags",
             "+faststart",
-            str(out_video),
+            str(session.out_video),
         ],
         error_cls=BurnError,
         what="字幕烧录",
     )
 
-    output_info = _probe(out_video)
-    output_duration = _duration_ms(output_info)
-    streams = output_info.get("streams") or []
-    stream_kinds = {
+    session.output_info = _probe(session.out_video)
+    session.output_duration = _duration_ms(session.output_info)
+    session.stream_kinds = {
         str(stream.get("codec_type")): str(stream.get("codec_name") or "")
-        for stream in streams
+        for stream in (session.output_info.get("streams") or [])
         if isinstance(stream, dict)
     }
 
-    verification: dict[str, object] | None = None
-    if options.verify and verify_at_ms is not None:
+
+def _verify_burn(session: _BurnSession) -> None:
+    """像素差核验：字幕位置上的区域确实变了才算烧上去。"""
+
+    options = session.options
+    if options.verify and session.verify_at_ms is not None:
         difference, strong_ratio = _region_diff(
-            video, out_video, verify_at_ms, options.position
+            session.video, session.out_video, session.verify_at_ms, options.position
         )
         ok = (
             difference >= options.verify_threshold
             or strong_ratio >= options.strong_ratio_threshold
         )
-        verification = {
-            "at_ms": verify_at_ms,
+        session.verification = {
+            "at_ms": session.verify_at_ms,
             "region": options.position,
             "region_pixel_diff": round(difference, 3),
             "strong_pixel_ratio": round(strong_ratio, 5),
@@ -314,42 +375,45 @@ def run_burn(options: BurnOptions) -> BurnResult:
             "strong_ratio_threshold": options.strong_ratio_threshold,
             "ok": ok,
         }
+    if session.verification is not None and not session.verification["ok"]:
+        session.warnings.append(
+            "字幕烧录核验未通过（画面底部像素差过小），请检查 ASS 字体/滤镜是否生效"
+        )
+    if session.stream_kinds.get("audio") is None:
+        session.warnings.append("输出没有音频流：输入可能本身无音轨")
+    if session.verification is not None and not session.verification["ok"]:
+        session.status = "warn"
 
-    warnings: list[str] = []
-    if verification is not None and not verification["ok"]:
-        warnings.append("字幕烧录核验未通过（画面底部像素差过小），请检查 ASS 字体/滤镜是否生效")
-    audio_kept = stream_kinds.get("audio") is not None
-    if not audio_kept:
-        warnings.append("输出没有音频流：输入可能本身无音轨")
 
-    status = "ok"
-    if verification is not None and not verification["ok"]:
-        status = "warn"
-    exit_code = 0 if status == "ok" else 2
+def _write_outputs(session: _BurnSession) -> BurnResult:
+    """写 ``burn.json`` 并返回命令行契约（核验不过 → 退出码 2）。"""
 
-    video_size, video_sha = file_digest(video)
-    subtitle_size, subtitle_sha = file_digest(subtitle)
-    out_size, out_sha = file_digest(out_video)
+    options = session.options
+    video_size, video_sha = file_digest(session.video)
+    subtitle_size, subtitle_sha = file_digest(session.subtitle)
+    out_size, out_sha = file_digest(session.out_video)
     report: dict[str, object] = {
         "schema_version": 1,
         "tool": "submatrix",
         "version": __version__,
         "command": "burn",
-        "generated_at": (options.generated_at or datetime.now().astimezone()).isoformat(),
-        "status": status,
+        "generated_at": (
+            options.generated_at or datetime.now().astimezone()
+        ).isoformat(),
+        "status": session.status,
         "input": {
             "video": {
-                "path": str(video.resolve()),
+                "path": str(session.video.resolve()),
                 "bytes": video_size,
                 "sha256": video_sha,
-                "duration_s": round(input_duration / 1000, 3),
+                "duration_s": round(session.input_duration / 1000, 3),
             },
             "subtitle": {
-                "path": str(subtitle.resolve()),
+                "path": str(session.subtitle.resolve()),
                 "bytes": subtitle_size,
                 "sha256": subtitle_sha,
-                "encoding": encoding or None,
-                "cues": cue_count,
+                "encoding": session.encoding or None,
+                "cues": session.cue_count,
             },
         },
         "config": {
@@ -359,31 +423,31 @@ def run_burn(options: BurnOptions) -> BurnResult:
             "verify": options.verify,
             "verify_threshold": options.verify_threshold,
             "strong_ratio_threshold": options.strong_ratio_threshold,
-            "ass": str(ass_path.resolve()),
+            "ass": str(session.ass_path.resolve()),
         },
         "output": {
-            "path": str(out_video.resolve()),
+            "path": str(session.out_video.resolve()),
             "bytes": out_size,
             "sha256": out_sha,
-            "duration_s": round(output_duration / 1000, 3),
-            "codecs": stream_kinds,
-            "duration_delta_ms": output_duration - input_duration,
+            "duration_s": round(session.output_duration / 1000, 3),
+            "codecs": session.stream_kinds,
+            "duration_delta_ms": session.output_duration - session.input_duration,
         },
-        "verification": verification,
-        "warnings": warnings,
-        "wall_s": round(time.monotonic() - started, 2),
+        "verification": session.verification,
+        "warnings": session.warnings,
+        "wall_s": round(time.monotonic() - session.started, 2),
     }
-    report_path = out_dir / "burn.json"
+    report_path = session.out_dir / "burn.json"
     report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
         newline="\n",
     )
     return BurnResult(
-        status=status,
-        exit_code=exit_code,
+        status=session.status,
+        exit_code=0 if session.status == "ok" else 2,
         report=report,
         report_path=report_path.resolve(),
-        video_path=out_video.resolve(),
-        ass_path=ass_path.resolve(),
+        video_path=session.out_video.resolve(),
+        ass_path=session.ass_path.resolve(),
     )
