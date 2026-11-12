@@ -13,13 +13,13 @@
 
 from __future__ import annotations
 
-import json
 import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from . import atomic
 from . import __version__
 from . import media
 from .export import dump_ass_single
@@ -438,11 +438,7 @@ def _write_outputs(session: _BurnSession) -> BurnResult:
         "wall_s": round(time.monotonic() - session.started, 2),
     }
     report_path = session.out_dir / "burn.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic.write_json(report_path, report)
     return BurnResult(
         status=session.status,
         exit_code=0 if session.status == "ok" else 2,

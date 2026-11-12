@@ -39,6 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence, cast
 
+from . import atomic
 from . import __version__
 from .clean import is_degenerate_text
 from .condense import CondenseResult, condense_text, estimate_max_chars
@@ -1558,11 +1559,7 @@ def _write_outputs(session: _TranslationSession) -> TranslateResult:
         cjk=session.tgt_profile.cjk,
     )
     report_path = out_dir / "translate.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic.write_json(report_path, report)
 
     return TranslateResult(
         status=str(report["status"]),

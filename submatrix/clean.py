@@ -15,6 +15,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import atomic
 from .srt import Subtitle, dump_srt, load_srt
 
 __all__ = ["CleanResult", "cleanup_srt", "cleanup_speakers", "is_degenerate_text"]
@@ -117,9 +118,5 @@ def cleanup_speakers(
     payload["cues"] = kept
     target = Path(out)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic.write_json(target, payload)
     return target

@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
+from . import atomic
 from . import __version__
 from . import media
 from .interpreters import (
@@ -820,9 +821,7 @@ def write_segments(
         ],
         "warnings": list(warnings),
     }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(path, payload)
     return path
 
 
@@ -886,23 +885,14 @@ def attach_speakers(
     speakers_path = out_dir / "speakers.json"
     srt_path = Path(srt)
     srt_size, srt_sha = file_digest(srt_path)
-    speakers_path.write_text(
-        json.dumps(
-            {
+    atomic.write_json(speakers_path, {
                 "schema_version": 1,
                 "tool": "submatrix",
                 "version": __version__,
                 "srt": str(srt_path.resolve()),
                 "speakers": speakers,
                 "cues": cues_payload,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+            })
 
     merged = dict(report or {})
     merged["schema_version"] = 1
@@ -947,9 +937,7 @@ def attach_speakers(
     merged["outputs"] = outputs
     merged["warnings"] = warnings
     report_path = out_dir / "diarize.json"
-    report_path.write_text(
-        json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(report_path, merged)
     return speakers_path.resolve(), merged
 
 
@@ -1246,23 +1234,14 @@ def _assign_speakers(session: _DiarizeSession) -> None:
         for index, (timing, speaker) in enumerate(zip(timings, session.assignments), start=1)
     ]
     session.speakers_path = session.out_dir / "speakers.json"
-    session.speakers_path.write_text(
-        json.dumps(
-            {
+    atomic.write_json(session.speakers_path, {
                 "schema_version": 1,
                 "tool": "submatrix",
                 "version": __version__,
                 "srt": str(session.srt.resolve()),
                 "speakers": session.speakers,
                 "cues": session.cues_payload,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+            })
     session.outputs.append(
         OutputFile(
             kind="speaker_assignments",
@@ -1374,9 +1353,7 @@ def _write_outputs(session: _DiarizeSession) -> DiarizeResult:
         "warnings": session.warnings,
     }
     report_path = session.out_dir / "diarize.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(report_path, report)
     # 分段单独落一份（OPT-5）：ASR 在跑的时候可以先算分段，之后只补字幕归属；
     # 也方便下次换字幕/重跑 ASR 时复用分段（分段只跟音频和聚类参数有关）。
     summary_block = section(report, "summary")

@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from . import atomic
 from .export import dump_ass, dump_bilingual_srt, dump_txt, dump_vtt
 from .layout import LayoutOptions, layout_pair
 from .report import OutputFile, build_report, describe_input
@@ -141,11 +141,7 @@ def run_matrix(options: MatrixOptions) -> MatrixResult:
     if layout_info is not None:
         report["layout"] = layout_info
     report_path = out_dir / "report.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic.write_json(report_path, report)
 
     return MatrixResult(
         status=result.status,

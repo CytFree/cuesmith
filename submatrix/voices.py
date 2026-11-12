@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
+from . import atomic
 from .tts import EdgeTtsEngine, TtsEngine, TtsError, find_edge_tts_python
 
 __all__ = [
@@ -210,7 +211,7 @@ def _write_cache(path: Path, voices: Sequence[Voice]) -> None:
                 for voice in voices
             ],
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        atomic.write_json(path, payload)
     except OSError:
         pass  # 缓存写不了不影响本次使用
 

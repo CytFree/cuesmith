@@ -45,6 +45,7 @@ import math
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+from . import atomic
 from . import __version__
 from .asr import AsrError, AsrOptions, model_variant, preferred_model, run_asr
 from .burn import BurnError, BurnOptions, run_burn
@@ -641,11 +642,7 @@ class _Run:
             "warnings": list(dict.fromkeys(self.warnings)),
             "wall_s": round(time.monotonic() - self.started, 1),
         }
-        report_path.write_text(
-            json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        atomic.write_json(report_path, report)
         exit_code = EXIT_OK if self.status == "ok" else EXIT_PARTIAL
         return PipelineResult(
             status=self.status,
@@ -2074,9 +2071,7 @@ def _remap_speaker_assignments(
         ],
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(out_path, payload)
     return out_path
 
 

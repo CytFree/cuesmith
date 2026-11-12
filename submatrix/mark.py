@@ -13,13 +13,13 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from . import atomic
 from . import __version__
 from . import media
 from .probe import MediaProbe, probe_media
@@ -452,9 +452,7 @@ def _mark_self_use(session: _MarkSession) -> None:
         },
         "output": {"path": str(session.video_path.resolve())},
     }
-    (session.out_dir / "self_use_notice.json").write_text(
-        json.dumps(notice, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(session.out_dir / "self_use_notice.json", notice)
     session.status = "self_use"
     session.verification = {
         "metadata_roundtrip": {"ok": True, "skipped": True, "fields": {}, "missing": []},
@@ -583,9 +581,7 @@ def _write_outputs(session: _MarkSession) -> MarkResult:
         "label_frame": str(session.label_frame) if session.label_frame is not None else None,
         "notes": session.notes,
     }
-    session.report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(session.report_path, report)
 
     return MarkResult(
         status=session.status,

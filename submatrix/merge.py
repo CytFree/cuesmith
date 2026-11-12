@@ -15,12 +15,12 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from . import atomic
 from . import __version__
 from .report import file_digest
 from .srt import Cue, Subtitle, Timing, dump_srt, load_srt
@@ -289,11 +289,7 @@ def run_merge(
         "outputs": [{"kind": "merged_srt", "path": str(merged_path.resolve())}],
     }
     report_path = out_dir / "merge.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    atomic.write_json(report_path, report)
 
     return MergeResult(
         status="ok",

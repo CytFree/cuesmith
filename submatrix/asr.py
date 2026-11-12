@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import sys
@@ -25,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
+from . import atomic
 from . import __version__
 from .interpreters import (
     Requirement,
@@ -552,20 +552,12 @@ def _write_outputs(session: _AsrSession) -> AsrResult:
                 size=session.srt_path.stat().st_size,
             )
         )
-    session.words_path.write_text(
-        json.dumps(
-            {
+    atomic.write_json(session.words_path, {
                 "language": payload.get("language"),
                 "language_probability": probability,
                 "duration_s": session.duration_s,
                 "words": session.words,
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+            })
     session.outputs.append(
         OutputFile(
             kind="word_timestamps",
@@ -624,9 +616,7 @@ def _write_outputs(session: _AsrSession) -> AsrResult:
         "warnings": session.warnings,
     }
     report_path = session.out_dir / "asr.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(report_path, report)
     if not options.keep_raw:
         session.raw_path.unlink(missing_ok=True)
 

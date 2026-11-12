@@ -13,12 +13,12 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from . import atomic
 from . import __version__
 from . import media
 from .report import OutputFile, file_digest
@@ -462,11 +462,7 @@ def run_probe(
             warnings=tuple(warnings),
             generated_at=generated_at,
         )
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
+        atomic.write_json(manifest_path, manifest)
         return manifest
 
     status = decision.kind

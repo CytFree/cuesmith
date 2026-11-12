@@ -23,6 +23,7 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
+from . import atomic
 from . import __version__
 from . import media
 from .bgm import BgmError, BgmOptions, BgmResult, run_bgm
@@ -642,9 +643,7 @@ def run_dub(
     _close_local_workers()
 
     report_path = Path(options.out) / "dub_report.json"
-    report_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    atomic.write_json(report_path, report)
     return DubResult(
         status=status,
         exit_code=0 if status == "ok" else 2,
