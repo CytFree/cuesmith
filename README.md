@@ -1,8 +1,13 @@
 # submatrix · 视频字幕提取 / 翻译 / 配音 / 成片
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/python-3.11-blue)
+
 > Windows + CPU 实测通过的 MVP：一条命令把「一条视频」变成「发布字幕 + 双语字幕 + 配音成片 + 硬字幕成片 + AIGC 标识」。
 >
-> 状态：**M0–M22 完成**，**751 个单测**、**27/27 一键回归**、zh↔en 双向真实素材、多人声自动判人数（VAD 预过滤 + 声纹二次聚类，6 个真实样本全中）与多音色配音、本地 Web GUI（含任务历史/重跑）均已跑通。
+> 状态：**M0–M22 完成**，**858 个用例**（854 通过 / 4 按需跳过）、**覆盖率 83%**、
+> `ruff` 与 `pyflakes` 零告警、**27/27 一键回归**、zh↔en 双向真实素材、多人声自动判人数
+> （VAD 预过滤 + 声纹二次聚类，6 个真实样本全中）与多音色配音、本地 Web GUI（含任务历史/重跑）均已跑通。
 
 ---
 
@@ -82,13 +87,17 @@ work/run1/
 ```powershell
 git clone <repo> ; cd <repo>
 python -m submatrix --help          # 直接可用：主包只用标准库 + ffmpeg
-# 可选：安装成包 / 带 GUI extra
+# 可选：安装成包（装完多一个 `submatrix` 命令，等价于 python -m submatrix）
 python -m pip install -e .
-python -m pip install -e ".[gui]"
+python -m pip install -e ".[gui]"    # 带本地 Web GUI
+python -m pip install -e ".[dev]"    # 开发：pytest / pytest-cov / ruff
 ```
 
 > 主包不 import 任何模型库；ASR / TTS / 分离 / BGM / GUI 都在各自的 venv 里，
 > 通过**子进程**调用（这也是 GPL/LGPL 组件与主包隔离的方式）。
+>
+> 也可以直接装打好的 wheel：`python -m pip install submatrix-0.1.0-py3-none-any.whl`
+> （wheel 里含全部 37 个模块与三个 worker 脚本，但**不含** `spike/` 下的模型与 venv）。
 
 ### 3.3 Worker 环境（按需装）
 
@@ -259,6 +268,7 @@ python -m submatrix gui        # 自动重入 spike/gui/.venv，打开 http://12
 | `找不到装有 edge-tts 的 Python` | 用 `--tts-python spike\.venv311\Scripts\python.exe`，或设 `SUBMATRIX_TTS_PYTHON` |
 | `找不到装有 faster-whisper 的 Python` | `--asr-python` 指向装了 faster-whisper 的解释器 |
 | `没找到说话人分割模型` | 按 [M11 §3](docs/M11-多人声-说话人分离与多音色配音-实现说明.md) 下载到 `spike/diarization/models` |
+| `找不到可用的中文字体` | `mark` 默认只找 Windows 字体（雅黑/黑体/宋体）与 Linux 的 Noto CJK；macOS 或自定义字体请用 `--font-file` 指向一个 `.ttf/.ttc` |
 | 内封字幕 + `src-lang auto` 失败 | 显式 `--src-lang zh`（字幕流无法判断语言），GUI 源语言同样要选 |
 | 翻译报 `LLM 返回不是 JSON 数组` 或输出 `Mi mi mi…` | 音乐/噪声字幕；M15 会自动过滤并回退免费 MT，重跑即可；仍失败看 `warnings` |
 | 免费 MT 报 `SSL: UNEXPECTED_EOF...` | 网络抖动；重试，或改用 `--llm`（DeepSeek） |
@@ -338,6 +348,18 @@ docs/                 除本 README 外的全部文档：需求、评审、里�
 - **只处理自有/已授权素材**；不做链接下载、硬字幕 OCR、唇形同步、本地声音克隆（理由见需求文档 §9）；
 - **AIGC 合规**：默认在成片上打显式标识 + 写隐式元数据并回读核验；发布前按平台要求确认文案与位置；
 - **语言**：目前只支持 zh↔en 双向（`LANG_PROFILES` 仅 zh/en）。
+
+---
+
+## 11. 许可与合规
+
+- 本仓库代码：[MIT](LICENSE)。
+- **外部组件各自许可**：ffmpeg（主包只以子进程调用，未链接其库）、ASR/TTS/分离/BGM
+  的模型与服务各有自己的条款，见 [依赖组件与付费项](docs/依赖组件与付费项-说明.md)。
+  主包刻意不 import 任何模型库，就是为了把 GPL/LGPL 组件隔离在进程边界之外。
+- 素材：只处理自有或已授权素材；AIGC 标识的文案与位置仍需按发布平台的要求确认。
+
+贡献方式见 [CONTRIBUTING.md](CONTRIBUTING.md)，编码约定见 [docs/代码规范.md](docs/代码规范.md)。
 
 
 

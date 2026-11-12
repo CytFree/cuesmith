@@ -117,11 +117,18 @@ python -m submatrix cost --work work\acceptance\one
 
 ---
 
-## 4. 质量基线（截至 2026-11-03）
+## 4. 质量基线
+
+> **口径**：下表的性能/实测数字是**各次实测当时**的值（日期见"截至"标注），不是今天的
+> 回归结果。当前的测试数、覆盖率与 lint 状态以 [README §3.5](../README.md#35-装完自检) 为准 ——
+> 本仓库遵守"同一个数字只写一处"（见[代码规范 §8](代码规范.md)）。
+>
+> **当前质量基线（2026-11-12）**：858 个用例（854 通过 / 4 按需跳过）、覆盖率 83%
+> （门槛 80%）、`ruff` 与 `pyflakes` 零告警、`# type: ignore` 0 处、结构约定 10 条检查全绿。
 
 | 项 | 结果 |
 |---|---|
-| 单测 | **751 passed** |
+| 单测 | **854 passed / 4 skipped**（2026-11-12；历史值 751、838） |
 | 一键回归 | **27/27，38.6s**（`work/regression/regression.json`） |
 | GUI 冒烟 | gradio 6.30.0 HTTP 200（51 blocks / 5 handlers） |
 | zh→en 真实素材 | 154s 央视科普：ok，成本 ¥0.0134–0.0165（LLM） |
@@ -140,7 +147,17 @@ python -m submatrix cost --work work\acceptance\one
 | **本地 TTS 兜底（M22）** | 默认仍 Edge；60s 素材 26 条 `--tts-provider local`：dub **37.44s、26/26、成片 60.0s、¥0**；模拟断网（Edge 缺依赖）**26 条全部本地兜底、状态 ok、71.44s、成片 60s**；MeloTTS 44.1kHz 端到端 10/10；pipeline 复用缓存只重跑 dub 27.3s、同配置重跑 cached（[说明](OPT11-本地TTS兜底-实现说明.md)） |
 | 本次新修 bug | 英文声纹模型截断（21.9→38.4MB）；diarize 缓存忽略人数/阈值/语言（已修 + 回归）；VAD 缺模型/二次聚类失败自动降级并告警；本地 TTS 缓存按引擎隔离（Edge mp3 / 本地 wav） |
 
-复跑证据：`work/gui/m16-real-demo2-*/`、`work/m16-real/four-speaker-run/`、
+**复跑证据不在仓库里**：`work/` 与 `spike/` 都被 `.gitignore` 忽略（产物/模型/venv 体积大且
+与素材授权相关）。要核对上表，请本地复跑——命令见 §3.1–§3.6，或直接：
+
+```powershell
+$env:SUBMATRIX_REAL_VIDEO = "D:\...\你的视频.mp4"
+$env:SUBMATRIX_REAL_OUT   = "work/cctv-demo"
+$env:SUBMATRIX_REAL_E2E   = "1"
+python -m pytest tests/test_real_sample.py -q -m slow
+```
+
+以下路径在**做完对应场景的机器上**才有：`work/gui/m16-real-demo2-*/`、`work/m16-real/four-speaker-run/`、
 `work/gui/m16-real-batch-*/`、`work/multi-speaker/`、`work/real-samples/`（真实素材验证）、
 `work/gui-opt8-e2e/report.json` + `work/history.db`（任务历史）、`work/opt10-net/`（翻译提速实验）、
 `work/opt11-local-dub/`、`work/opt11-fallback-dub/`、`work/local-tts-eval/worker-smoke/`（本地 TTS）。
