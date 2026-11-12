@@ -10,7 +10,7 @@
 ## 开发环境
 
 ```powershell
-git clone <repo> ; cd <repo>
+git clone https://github.com/CytFree/cuesmith.git ; cd cuesmith
 python -m pip install -e ".[dev]"    # pytest / pytest-cov / ruff
 python -m pytest -q                  # 858 个用例（854 通过 / 4 按需跳过）
 ```

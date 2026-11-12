@@ -5,6 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/python-3.11-blue)
+[![tests](https://github.com/CytFree/cuesmith/actions/workflows/tests.yml/badge.svg)](https://github.com/CytFree/cuesmith/actions/workflows/tests.yml)
 
 > Windows + CPU 实测通过的 MVP：一条命令把「一条视频」变成「发布字幕 + 双语字幕 + 配音成片 + 硬字幕成片 + AIGC 标识」。
 >
@@ -88,7 +89,7 @@ work/run1/
 ### 3.2 主包（零运行时依赖）
 
 ```powershell
-git clone <repo> ; cd <repo>
+git clone https://github.com/CytFree/cuesmith.git ; cd cuesmith
 python -m cuesmith --help          # 直接可用：主包只用标准库 + ffmpeg
 # 可选：安装成包（装完多一个 `cuesmith` 命令，等价于 python -m cuesmith）
 python -m pip install -e .

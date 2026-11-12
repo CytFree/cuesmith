@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # 只在 Windows runner 上跑：mark/burn 依赖中文字体与 ffmpeg，Linux 需要先解决
+    # 字体路径（Noto CJK 安装位置）才能跑，等验证过再补 ubuntu job。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install ffmpeg
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install package + dev tools
+        run: python -m pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: python -m ruff check cuesmith tests
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Coverage gate (仅 main 分支，避免每个 PR 都多跑一遍)
+        if: github.ref == 'refs/heads/main'
+        run: python -m pytest -q --cov=cuesmith --cov-fail-under=80

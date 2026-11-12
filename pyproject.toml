@@ -21,8 +21,9 @@ classifiers = [
 ]
 
 [project.urls]
-# 发布到 GitHub 时把 OWNER 换成实际账号（现在是占位，不写死假地址）
-Repository = "https://github.com/OWNER/cuesmith"
+Repository = "https://github.com/CytFree/cuesmith"
+Issues = "https://github.com/CytFree/cuesmith/issues"
+Changelog = "https://github.com/CytFree/cuesmith/blob/main/CHANGELOG.md"
 
 [project.scripts]
 cuesmith = "cuesmith.cli:main"
@@ -31,7 +32,8 @@ cuesmith = "cuesmith.cli:main"
 # 本地 Web GUI（Gradio 薄壳）：不装也能用全部 CLI 功能
 gui = ["gradio>=6"]
 # 开发工具（不是运行时依赖）：提交前跑 pytest + ruff，覆盖率按需
-dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.17"]
+# numpy / requests 只被测试用到（worker 的数值辅助函数、tools/tts_dashscope 的假接口）
+dev = ["pytest>=8", "pytest-cov>=7", "ruff>=0.17", "numpy>=1.26", "requests>=2"]
 
 [build-system]
 requires = ["setuptools>=68"]
