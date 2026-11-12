@@ -275,13 +275,23 @@ def test_find_model_accepts_explicit_directory(tmp_path) -> None:
     assert find_model(str(model)) == str(model)
 
 
-def test_find_model_maps_known_names_to_local_dirs() -> None:
-    """`--model small` 要落到项目内本地目录：交给 faster-whisper 会去 HF 下载（本机被墙）。"""
+def test_find_model_maps_known_names_to_local_dirs(tmp_path, monkeypatch) -> None:
+    """`--model small` 要落到本地模型目录：交给 faster-whisper 会去 HF 下载（国内被墙）。
+
+    不依赖本机真有模型：用 tmp_path 造一个合法目录（含 model.bin），替换"名字→目录"
+    这张表，验的是映射逻辑本身（CI 上没有 spike/ 下的模型）。
+    """
+
+    import cuesmith.asr as asr_module
+
+    model_dir = tmp_path / "faster-whisper-small"
+    model_dir.mkdir()
+    (model_dir / "model.bin").write_bytes(b"x")
+    monkeypatch.setattr(asr_module, "local_models", lambda: {"small": model_dir})
 
     resolved = find_model("small")
 
-    assert Path(resolved).is_dir()
-    assert "faster-whisper-small" in resolved.replace("\\", "/")
+    assert Path(resolved) == model_dir
 
 
 def test_find_model_passes_through_unknown_names() -> None:

@@ -414,6 +414,7 @@ def _vad_report(
 
 
 def main() -> int:
+    protocol.make_output_utf8()
     parser = argparse.ArgumentParser(description="sherpa-onnx offline speaker diarization worker")
     parser.add_argument("--audio", required=True, help="16kHz 16bit mono wav")
     parser.add_argument("--segmentation", required=True, help="pyannote segmentation onnx")

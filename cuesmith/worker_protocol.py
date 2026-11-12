@@ -43,6 +43,7 @@ __all__ = [
     "TRACEBACK_CHARS",
     "TextStream",
     "describe_error",
+    "make_output_utf8",
     "emit_progress",
     "error_payload",
     "ok_payload",
@@ -91,6 +92,22 @@ class TextStream(Protocol):
     def write(self, data: str) -> object: ...
 
     def flush(self) -> object: ...
+
+
+def make_output_utf8() -> None:
+    """Windows 上 stdout/stderr 被重定向（管道 / 文件）时默认走 ANSI 代码页，
+    含中文的 ``--help`` 会直接 ``UnicodeEncodeError``（英文 Windows 上是 cp1252）。
+    这里把被重定向的流切到 UTF-8；交互式控制台不动（Python 走 WriteConsoleW，本来就是 Unicode）。
+    """
+
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not stream.isatty():
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            continue
 
 
 def write_line(stream: TextStream, payload: Mapping[str, object]) -> None:

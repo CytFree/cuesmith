@@ -317,6 +317,7 @@ def _synthesize(tts, request: dict, *, kind: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    protocol.make_output_utf8()
     args = build_parser().parse_args(argv)
 
     # stdout 是协议通道：把 sys.stdout 改道到 stderr，库里的 print/进度只走 stderr，

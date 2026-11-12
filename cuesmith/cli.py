@@ -72,6 +72,7 @@ from .translate import (
     run_translate,
 )
 from .validate import LANG_PROFILES, Limits
+from .worker_protocol import make_output_utf8
 
 __all__ = ["main"]
 
@@ -1555,6 +1556,7 @@ def _run_history(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    make_output_utf8()
     parser = build_parser()
     try:
         args = parser.parse_args(argv)

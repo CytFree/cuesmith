@@ -1682,14 +1682,18 @@ def test_asr_uses_medium_for_chinese_by_default(tmp_path, monkeypatch) -> None:
 
 
 def test_asr_model_change_invalidates_asr_cache(tmp_path, monkeypatch) -> None:
-    """GUI 里把 ASR 模型从默认改成 medium 后，不能复用旧的 small 结果。"""
+    """ASR 模型从 medium 改成 small 后，不能复用旧的 medium 结果。
+
+    两次都显式指定模型：不显式时默认模型取决于"本机装了哪个模型"，CI 上没有模型就会
+    回落到 small，与显式 small 相同 → 缓存命中、asr 根本没跑（这条在 CI 上红过）。
+    """
 
     calls = Calls()
     install_fakes(monkeypatch, calls, route="route_to_asr", language="zh")
     src = make_src(tmp_path)
     out = tmp_path / "out"
 
-    run_pipeline(PipelineOptions(src=src, out=out, tgt_lang="en"))
+    run_pipeline(PipelineOptions(src=src, out=out, tgt_lang="en", asr_model="medium"))
     calls.order.clear()
 
     result = run_pipeline(PipelineOptions(src=src, out=out, tgt_lang="en", asr_model="small"))

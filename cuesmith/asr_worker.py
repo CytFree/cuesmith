@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    protocol.make_output_utf8()
     args = build_parser().parse_args(argv)
     started = time.monotonic()
     try:

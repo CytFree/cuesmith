@@ -57,6 +57,7 @@ EXPECTED_EDGES = {
     "cli": {
         "asr", "burn", "cost", "diarize", "dub", "glossary", "gui", "history",
         "mark", "matrix", "merge", "pipeline", "probe", "srt", "translate", "validate",
+        "worker_protocol",
     },
     "condense": {"textutil"},
     "cost": set(),
